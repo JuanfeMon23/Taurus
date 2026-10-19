@@ -1,0 +1,16 @@
+{
+  "appId": "com.taurus.app",
+  "appName": "Taurus",
+  "webDir": ".output/public",
+  "plugins": {
+    "SocialLogin": {
+      "providers": {
+        "google": true,
+        "facebook": false,
+        "apple": false,
+        "twitter": false
+      },
+      "logLevel": 1
+    }
+  }
+}
