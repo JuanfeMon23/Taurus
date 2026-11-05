@@ -26,8 +26,16 @@ export interface DayMeta extends Meta {
 export interface ServiceRec extends Meta {
   date: string
   amount: number
+  /** Propina u otro extra (≥ 0); ausente = 0. */
+  bonus?: number
   method: PayMethod
   note?: string
+  /** Datos de viaje (HH:MM / km); ausentes en servicios anteriores. */
+  startTime?: string
+  endTime?: string
+  distanceKm?: number
+  origin?: string
+  destination?: string
 }
 
 export interface CashMeta extends Meta {
@@ -71,9 +79,17 @@ export interface Store {
 export interface Service {
   id?: string
   amount: number
+  /** Propina u otro extra (≥ 0); ausente = 0. */
+  bonus?: number
   note?: string
   /** Ausente = efectivo (InDrive paga mayormente en efectivo). */
   method?: PayMethod
+  /** Datos de viaje (HH:MM / km); ausentes en servicios anteriores. */
+  startTime?: string
+  endTime?: string
+  distanceKm?: number
+  origin?: string
+  destination?: string
 }
 
 export interface CashMovement {

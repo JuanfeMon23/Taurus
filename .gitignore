@@ -22,3 +22,8 @@ logs
 .env
 .env.*
 !.env.example
+
+# Agentic config (never versioned)
+.claude/
+AGENTS.md
+CLAUDE.md

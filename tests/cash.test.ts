@@ -31,6 +31,26 @@ describe('cashSummary', () => {
     expect(cashSummary(day([{ amount: 1000 }]), cash({ opening: 0 })).cashIncome).toBe(1000)
   })
 
+  it('el bonus en efectivo suma al efectivo esperado', () => {
+    const r = cashSummary(day([{ amount: 10000, bonus: 2000, method: 'cash' }]), cash({ opening: 0 }))
+    expect(r.cashIncome).toBe(12000)
+    expect(r.transferIncome).toBe(0)
+    expect(r.expected).toBe(12000)
+  })
+
+  it('el bonus en transferencia suma a transferencias y no al efectivo', () => {
+    const r = cashSummary(day([{ amount: 10000, bonus: 3000, method: 'transfer' }]), cash({ opening: 0 }))
+    expect(r.transferIncome).toBe(13000)
+    expect(r.cashIncome).toBe(0)
+    expect(r.expected).toBe(0)
+  })
+
+  it('un servicio sin bonus se calcula igual que antes', () => {
+    const r = cashSummary(day([{ amount: 10000, bonus: 0 }, { amount: 5000, bonus: null, method: 'transfer' }]), cash({ opening: 0 }))
+    expect(r.cashIncome).toBe(10000)
+    expect(r.transferIncome).toBe(5000)
+  })
+
   it('sin caja abierta todo es cero', () => {
     const r = cashSummary(null, null)
     expect(r.expected).toBe(0)

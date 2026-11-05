@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { Capacitor } from '@capacitor/core'
 import { BarChart3, CalendarDays, CircleCheck, CircleAlert, Cloud, CloudOff, History as HistoryIcon, Moon, SlidersHorizontal, Sun, Wallet } from 'lucide-vue-next'
+import AppSidebar from './components/AppSidebar.vue'
 import SyncSheet from './components/SyncSheet.vue'
 import Cash from './components/Cash.vue'
 import DayForm from './components/DayForm.vue'
@@ -11,15 +13,23 @@ const tabs = [
   { key: 'hoy', label: 'Hoy', icon: CalendarDays, view: DayForm },
   { key: 'caja', label: 'Caja', icon: Wallet, view: Cash },
   { key: 'historial', label: 'Historial', icon: HistoryIcon, view: HistoryView },
-  { key: 'stats', label: 'Stats', icon: BarChart3, view: Stats },
+  { key: 'stats', label: 'Estadísticas', icon: BarChart3, view: Stats },
   { key: 'tarifas', label: 'Tarifas', icon: SlidersHorizontal, view: Rates },
 ] as const
 
+const native = Capacitor.isNativePlatform()
 const index = ref(0)
+const SIDEBAR_KEY = 'taurus-sidebar-collapsed'
+const collapsed = ref(false)
+onMounted(() => { collapsed.value = localStorage.getItem(SIDEBAR_KEY) === '1' })
+watch(collapsed, v => localStorage.setItem(SIDEBAR_KEY, v ? '1' : '0'))
+const select = (key: string) => { index.value = Math.max(0, tabs.findIndex(t => t.key === key)) }
 const current = computed(() => tabs[index.value]!)
 const { theme, toggle } = useTheme()
 const { toasts } = useToast()
-const sheets = useSheetsSync()
+// Sheets solo en el APK; la web guarda en el backend local.
+const sheetsEnabled = native
+const sheets = sheetsEnabled ? useSheetsSync() : null
 const showSync = ref(false)
 
 const rawDate = new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())
@@ -27,11 +37,12 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :class="{ desktop: !native }" :style="native ? undefined : { '--sidebar-w': collapsed ? '72px' : '232px' }">
+    <AppSidebar v-if="!native" v-model:collapsed="collapsed" :items="tabs" :active="current.key" @select="select" />
     <NuxtPwaManifest />
 
     <header class="row between top">
-      <div class="row">
+      <div v-if="native" class="row">
         <svg class="logo" viewBox="0 0 512 512" aria-hidden="true">
           <rect width="512" height="512" rx="120" fill="url(#g)" />
           <defs>
@@ -46,10 +57,14 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
           <p class="muted small">{{ today }}</p>
         </div>
       </div>
+      <div v-else>
+        <h1>{{ current.label }}</h1>
+        <p class="muted small">{{ today }}</p>
+      </div>
       <div class="row" style="gap: 2px">
-        <button class="btn icon ghost theme sync" aria-label="Google Sheets" @click="showSync = true">
-          <component :is="sheets.state.status === 'error' || sheets.state.status === 'pending' ? CloudOff : Cloud" :size="22" />
-          <i class="dot" :class="sheets.state.connected ? sheets.state.status : 'off'" />
+        <button v-if="sheets" class="btn icon ghost theme sync" aria-label="Google Sheets" @click="showSync = true">
+          <component :is="sheets!.state.status === 'error' || sheets!.state.status === 'pending' ? CloudOff : Cloud" :size="22" />
+          <i class="dot" :class="sheets!.state.connected ? sheets!.state.status : 'off'" />
         </button>
         <button class="btn icon ghost theme" :aria-label="theme === 'dark' ? 'Tema claro' : 'Tema oscuro'" @click="toggle">
           <Transition name="spin" mode="out-in">
@@ -68,7 +83,7 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
       </Transition>
     </main>
 
-    <nav class="tabbar" aria-label="Secciones">
+    <nav v-if="native" class="tabbar" aria-label="Secciones">
       <span class="pill" :style="{ '--i': index }" />
       <button v-for="(t, i) in tabs" :key="t.key" :class="{ active: i === index }" :aria-label="t.label" @click="index = i">
         <component :is="t.icon" :size="22" :stroke-width="i === index ? 2.4 : 1.9" />
@@ -76,7 +91,7 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
       </button>
     </nav>
 
-    <SyncSheet :open="showSync" @close="showSync = false" />
+    <SyncSheet v-if="sheets" :open="showSync" @close="showSync = false" />
 
     <TransitionGroup name="toast" tag="div" class="toasts">
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.kind">
@@ -101,6 +116,11 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
 .sync .dot.error { background: var(--neg); }
 
 main { position: relative; }
+
+/* Escritorio (web): contenido a la derecha de la barra lateral. */
+.app.desktop { max-width: none; margin: 0; padding: 24px 32px 48px calc(var(--sidebar-w) + 32px); transition: padding-left 0.25s var(--ease); }
+.app.desktop > header, .app.desktop > main { max-width: 1280px; }
+.app.desktop .top { padding-top: 0; }
 
 .tabbar {
   position: fixed; z-index: 20;

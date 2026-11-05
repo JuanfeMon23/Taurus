@@ -31,6 +31,20 @@ cd android
 
 El APK queda en `android/app/build/outputs/apk/debug/app-debug.apk`.
 
+## Backend (API local)
+
+Requisitos: Python 3.13, [uv](https://docs.astral.sh/uv/) y PostgreSQL con la base `taurus`.
+
+```bash
+cd backend
+cp .env.example .env        # ajusta DATABASE_URL
+uv sync
+uv run alembic upgrade head
+uv run python -m app        # http://127.0.0.1:8400/api/v1/health
+```
+
+Escucha solo en `127.0.0.1:8400`. Tests: `uv run pytest -q` (usa la base `taurus_test`).
+
 ## Google Sheets (opcional)
 
 La sincronización usa un ID de cliente OAuth web; se puede cambiar con la variable `NUXT_PUBLIC_GOOGLE_CLIENT_ID`.

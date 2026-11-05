@@ -1,4 +1,5 @@
 import type { CashDay, DayRecord } from '../services/types'
+import { tripTotal } from './trip'
 
 export interface CashSummary {
   opening: number
@@ -19,8 +20,8 @@ const sum = (cash: CashDay | null, type: CashDay['movements'][number]['type']) =
 /** Efectivo esperado en caja: apertura + cobros en efectivo + aportes − gastos − retiros. */
 export function cashSummary(day: DayRecord | null, cash: CashDay | null): CashSummary {
   const services = day?.services ?? []
-  const cashIncome = services.filter(s => (s.method ?? 'cash') === 'cash').reduce((t, s) => t + s.amount, 0)
-  const transferIncome = services.filter(s => s.method === 'transfer').reduce((t, s) => t + s.amount, 0)
+  const cashIncome = services.filter(s => (s.method ?? 'cash') === 'cash').reduce((t, s) => t + tripTotal(s), 0)
+  const transferIncome = services.filter(s => s.method === 'transfer').reduce((t, s) => t + tripTotal(s), 0)
   const opening = cash?.opening ?? 0
   const expenses = sum(cash, 'expense')
   const withdrawals = sum(cash, 'withdrawal')

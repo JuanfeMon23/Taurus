@@ -1,4 +1,5 @@
 import { computeDay, type Category } from '../utils/calc'
+import { tripTotal } from '../utils/trip'
 import { EPOCH, newId, now } from './ids'
 import { upsert } from './memoryStore'
 import { same } from './merge'
@@ -17,6 +18,18 @@ const SEED: CategoryRec[] = [
   { id: 'cat-gasolina', name: 'Gasolina', rateMode: 'direct', ratePerKm: 100, active: true, updatedAt: EPOCH },
   { id: 'cat-servicio-moto', name: 'Servicio moto', rateMode: 'derived', totalCost: 160000, intervalKm: 3500, active: true, updatedAt: EPOCH },
 ]
+
+/** Copia al destino los datos de viaje presentes (los servicios viejos no los tienen). */
+function tripFields<T extends object>(target: T, from: Service): T {
+  const out: any = target
+  if (from.bonus) out.bonus = from.bonus
+  if (from.startTime) out.startTime = from.startTime
+  if (from.endTime) out.endTime = from.endTime
+  if (from.distanceKm !== undefined && from.distanceKm !== null) out.distanceKm = from.distanceKm
+  if (from.origin) out.origin = from.origin
+  if (from.destination) out.destination = from.destination
+  return target
+}
 
 const live = <T extends { deleted?: boolean }>(xs: T[]) => xs.filter(x => !x.deleted)
 
@@ -56,11 +69,11 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     const services = live(st.services).filter(x => x.date === date)
     if (!meta && !services.length) return null
     const costs = meta?.costs ?? []
-    const gross = services.reduce((t, x) => t + x.amount, 0)
+    const gross = services.reduce((t, x) => t + tripTotal(x), 0)
     const totalCost = costs.reduce((t, c) => t + c.amount, 0)
     return {
       date, km: meta?.km ?? 0, note: meta?.note, costs, gross, totalCost, net: gross - totalCost,
-      services: services.map(x => ({ id: x.id, amount: x.amount, method: x.method, note: x.note })),
+      services: services.map(x => tripFields({ id: x.id, amount: x.amount, method: x.method, note: x.note }, x)),
     }
   }
 
@@ -140,14 +153,14 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const st = await s()
       const t = now()
       const categories = live(st.categories)
-      const { costs } = computeDay({ services: input.services.map(x => x.amount), km: input.km, categories })
+      const { costs } = computeDay({ services: input.services.map(tripTotal), km: input.km, categories })
       const prev = st.days.find(d => d.id === input.date && !d.deleted)
       const meta: DayMeta = { id: input.date, date: input.date, km: input.km, note: input.note, costs, updatedAt: t }
       const changedMeta = !prev || !same({ ...prev, updatedAt: '' }, { ...meta, updatedAt: '' })
       const services = diffChildren<ServiceRec>(
         live(st.services).filter(x => x.date === input.date),
         input.services,
-        (x, id, ts) => ({ id, date: input.date, amount: x.amount, method: x.method ?? 'cash', note: x.note, updatedAt: ts }),
+        (x, id, ts) => tripFields({ id, date: input.date, amount: x.amount, method: x.method ?? 'cash', note: x.note, updatedAt: ts }, x),
         t,
       )
       await put({ days: changedMeta ? [meta] : [], services })

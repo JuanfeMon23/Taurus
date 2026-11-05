@@ -99,3 +99,19 @@ describe('taurus (dominio)', () => {
     expect(await phone.repo.listCategories()).toHaveLength(2)
   })
 })
+
+describe('taurus (datos de viaje)', () => {
+  it('guarda y devuelve datos de viaje; los servicios viejos no los tienen', async () => {
+    const t = await setup()
+    await t.saveDay({
+      date: '2026-11-04', km: 10,
+      services: [
+        { amount: 10000 },
+        { amount: 20000, startTime: '23:30', endTime: '00:10', distanceKm: 4.5, origin: 'A', destination: 'B' },
+      ],
+    })
+    const d = (await t.repo.getDay('2026-11-04'))!
+    expect(d.services[0]!.startTime).toBeUndefined()
+    expect(d.services[1]).toMatchObject({ startTime: '23:30', endTime: '00:10', distanceKm: 4.5, origin: 'A', destination: 'B' })
+  })
+})

@@ -10,6 +10,8 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
   runtimeConfig: {
     public: {
+      // Backend local de Taurus (solo web; el APK usa SQLite).
+      apiBase: process.env.NUXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8400/api/v1',
       // Client ID de OAuth (público por diseño). El client_secret NO se usa ni se incluye en la app.
       googleClientId: process.env.NUXT_PUBLIC_GOOGLE_CLIENT_ID
         ?? '921319021536-huj7hhki8nm54i1d1dtqe1c8q2n3j7b9.apps.googleusercontent.com',

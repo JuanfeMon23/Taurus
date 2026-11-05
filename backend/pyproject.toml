@@ -1,0 +1,30 @@
+[project]
+name = "taurus-backend"
+version = "0.1.0"
+description = "Backend local de Taurus (FastAPI + PostgreSQL)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "fastapi",
+  "sqlalchemy[asyncio]>=2",
+  "asyncpg",
+  "alembic",
+  "pydantic-settings",
+  "uvicorn",
+]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio", "ruff", "httpx"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["app"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
