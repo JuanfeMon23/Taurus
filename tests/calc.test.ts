@@ -18,20 +18,20 @@ describe('categoryRate', () => {
 
 describe('computeDay', () => {
   it('calcula bruto, costos por categoría y neto', () => {
-    const r = computeDay({ services: [120000, 80000], km: 100, categories: [gasolina, servicio] })
-    expect(r.gross).toBe(200000)
-    expect(r.costs.map(c => c.amount)).toEqual([10000, expect.closeTo(4571.43, 1)])
-    expect(r.totalCost).toBeCloseTo(14571.43, 1)
-    expect(r.net).toBeCloseTo(185428.57, 1)
+    const dayResult = computeDay({ services: [120000, 80000], km: 100, categories: [gasolina, servicio] })
+    expect(dayResult.gross).toBe(200000)
+    expect(dayResult.costs.map(costLine => costLine.amount)).toEqual([10000, expect.closeTo(4571.43, 1)])
+    expect(dayResult.totalCost).toBeCloseTo(14571.43, 1)
+    expect(dayResult.net).toBeCloseTo(185428.57, 1)
   })
   it('ignora categorías inactivas', () => {
-    const r = computeDay({ services: [50000], km: 10, categories: [gasolina, { ...servicio, active: false }] })
-    expect(r.costs).toHaveLength(1)
-    expect(r.net).toBe(49000)
+    const dayResult = computeDay({ services: [50000], km: 10, categories: [gasolina, { ...servicio, active: false }] })
+    expect(dayResult.costs).toHaveLength(1)
+    expect(dayResult.net).toBe(49000)
   })
   it('sin servicios ni km da cero', () => {
-    const r = computeDay({ services: [], km: 0, categories: [gasolina] })
-    expect(r.gross).toBe(0)
-    expect(r.net).toBe(0)
+    const dayResult = computeDay({ services: [], km: 0, categories: [gasolina] })
+    expect(dayResult.gross).toBe(0)
+    expect(dayResult.net).toBe(0)
   })
 })

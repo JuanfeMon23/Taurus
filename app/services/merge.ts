@@ -2,22 +2,22 @@ import { emptySnapshot, type Collection, type Meta, type Snapshot } from './type
 
 const COLLECTIONS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements']
 
-/** a gana a b si es más reciente; en empate gana el borrado (los borrados no "reviven"). */
-function wins(a: Meta, b: Meta) {
-  if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt
-  return !!a.deleted && !b.deleted
+/** `candidate` gana a `rival` si es más reciente; en empate gana el borrado (los borrados no "reviven"). */
+function wins(candidate: Meta, rival: Meta) {
+  if (candidate.updatedAt !== rival.updatedAt) return candidate.updatedAt > rival.updatedAt
+  return !!candidate.deleted && !rival.deleted
 }
 
 /** JSON canónico: claves ordenadas y sin campos undefined (el orden de las claves no cuenta como cambio). */
-function canon(x: unknown): string {
-  if (Array.isArray(x)) return `[${x.map(canon).join(',')}]`
-  if (x && typeof x === 'object') {
-    const entries = Object.entries(x).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))
-    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canon(v)}`).join(',')}}`
+function canon(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canon).join(',')}]`
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).filter(([, entryValue]) => entryValue !== undefined).sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+    return `{${entries.map(([key, entryValue]) => `${JSON.stringify(key)}:${canon(entryValue)}`).join(',')}}`
   }
-  return JSON.stringify(x)
+  return JSON.stringify(value)
 }
-export const same = (a: unknown, b: unknown) => canon(a) === canon(b)
+export const same = (first: unknown, second: unknown) => canon(first) === canon(second)
 
 export interface MergeResult {
   merged: Snapshot
@@ -33,21 +33,21 @@ export function mergeSnapshots(local: Snapshot, remote: Snapshot): MergeResult {
   const toLocal = emptySnapshot()
   let remoteChanged = false
 
-  for (const col of COLLECTIONS) {
-    const l = new Map((local[col] as Meta[]).map(r => [r.id, r]))
-    const r = new Map((remote[col] as Meta[]).map(x => [x.id, x]))
+  for (const collection of COLLECTIONS) {
+    const localById = new Map((local[collection] as Meta[]).map(record => [record.id, record]))
+    const remoteById = new Map((remote[collection] as Meta[]).map(record => [record.id, record]))
     const out: Meta[] = []
     const pull: Meta[] = []
-    for (const id of new Set([...l.keys(), ...r.keys()])) {
-      const a = l.get(id)
-      const b = r.get(id)
-      const pick = !b ? a! : !a ? b : wins(b, a) ? b : a
+    for (const id of new Set([...localById.keys(), ...remoteById.keys()])) {
+      const localRecord = localById.get(id)
+      const remoteRecord = remoteById.get(id)
+      const pick = !remoteRecord ? localRecord! : !localRecord ? remoteRecord : wins(remoteRecord, localRecord) ? remoteRecord : localRecord
       out.push(pick)
-      if (!a || (pick === b && !same(a, b))) pull.push(pick)
-      if (!b || (pick === a && !same(a, b))) remoteChanged = true
+      if (!localRecord || (pick === remoteRecord && !same(localRecord, remoteRecord))) pull.push(pick)
+      if (!remoteRecord || (pick === localRecord && !same(localRecord, remoteRecord))) remoteChanged = true
     }
-    ;(merged[col] as Meta[]) = out
-    ;(toLocal[col] as Meta[]) = pull
+    ;(merged[collection] as Meta[]) = out
+    ;(toLocal[collection] as Meta[]) = pull
   }
   return { merged, toLocal, remoteChanged }
 }

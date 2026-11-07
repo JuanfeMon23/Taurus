@@ -1,4 +1,5 @@
 import { computeDay, type Category } from './calc'
+import { dayNet, sumCommission } from './commission'
 import { formatDuration, sumDistance, tripMinutes, tripTotal } from './trip'
 import type { Service } from '../services/types'
 
@@ -6,22 +7,22 @@ import type { Service } from '../services/types'
 
 /** Agrega el viaje (sin id o con id desconocido) o reemplaza el que tiene el mismo id. No muta la lista. */
 export function upsertTrip(list: Service[], trip: Service): Service[] {
-  const i = trip.id ? list.findIndex(x => x.id === trip.id) : -1
-  if (i < 0) return [...list, trip]
-  return list.map((x, j) => (j === i ? trip : x))
+  const existingIndex = trip.id ? list.findIndex(item => item.id === trip.id) : -1
+  if (existingIndex < 0) return [...list, trip]
+  return list.map((item, index) => (index === existingIndex ? trip : item))
 }
 
 export function removeTrip(list: Service[], id: string): Service[] {
-  return list.filter(x => x.id !== id)
+  return list.filter(item => item.id !== id)
 }
 
-/** Por hora de recogida; los servicios sin hora quedan al final (orden estable). */
+/** Por hora de recogida descendente (el último viaje primero); los servicios sin hora quedan al final (orden estable). */
 export function sortTrips(list: Service[]): Service[] {
-  return [...list].sort((a, b) => {
-    if (!a.startTime && !b.startTime) return 0
-    if (!a.startTime) return 1
-    if (!b.startTime) return -1
-    return a.startTime.localeCompare(b.startTime)
+  return [...list].sort((first, second) => {
+    if (!first.startTime && !second.startTime) return 0
+    if (!first.startTime) return 1
+    if (!second.startTime) return -1
+    return second.startTime.localeCompare(first.startTime)
   })
 }
 
@@ -36,10 +37,14 @@ export interface DayTotals {
   /** Bonus total del día (ya incluido en el bruto). */
   bonus: number
   totalCost: number
+  /** Comisión inDrive del día e IVA de esa comisión. */
+  commission: number
+  commissionVat: number
+  /** Neto = bruto − costos por km − comisión − IVA. */
   net: number
 }
 
-const clean = (n: number) => Math.round(n * 1e9) / 1e9
+const clean = (value: number) => Math.round(value * 1e9) / 1e9
 
 /** Km del día = distancia de los viajes + km extra (fuera de viajes; vacío/negativo cuenta 0). */
 export function dayKm(trips: Service[], extraKm: number): number {
@@ -54,14 +59,20 @@ export function extraKmFrom(totalKm: number, trips: Service[]): number {
 
 /** `km` es el total del día (viajes + extra), base de los costos. */
 export function dayTotals(trips: Service[], km: number, categories: Category[]): DayTotals {
-  const r = computeDay({ services: trips.map(tripTotal), km, categories })
-  return { count: trips.length, tripKm: sumDistance(trips), km, gross: r.gross, bonus: clean(trips.reduce((s, x) => s + (tripTotal(x) - x.amount), 0)), totalCost: r.totalCost, net: r.net }
+  const dayResult = computeDay({ services: trips.map(tripTotal), km, categories })
+  const { commission, commissionVat } = sumCommission(trips)
+  return {
+    count: trips.length, tripKm: sumDistance(trips), km, gross: dayResult.gross,
+    bonus: clean(trips.reduce((total, trip) => total + (tripTotal(trip) - trip.amount), 0)),
+    totalCost: dayResult.totalCost, commission, commissionVat,
+    net: dayNet(dayResult.gross, dayResult.totalCost, commission, commissionVat),
+  }
 }
 
-export function tripSummary(x: Service): { schedule: string; duration: string; route: string } {
+export function tripSummary(trip: Service): { schedule: string; duration: string; route: string } {
   return {
-    schedule: x.startTime && x.endTime ? `${x.startTime}–${x.endTime}` : '',
-    duration: formatDuration(tripMinutes(x.startTime, x.endTime)),
-    route: [x.origin, x.destination].filter(Boolean).join(' → '),
+    schedule: trip.startTime && trip.endTime ? `${trip.startTime}–${trip.endTime}` : '',
+    duration: formatDuration(tripMinutes(trip.startTime, trip.endTime)),
+    route: [trip.origin, trip.destination].filter(Boolean).join(' → '),
   }
 }

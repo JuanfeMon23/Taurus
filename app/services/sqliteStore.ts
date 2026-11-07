@@ -25,40 +25,40 @@ const rows = async (db: SQLiteDBConnection, sql: string) => (await db.query(sql)
 
 /** Lee el esquema v1/v2 con la forma del formato anterior para pasarlo por fromLegacy. */
 async function readLegacy(db: SQLiteDBConnection) {
-  const categories = (await rows(db, 'SELECT * FROM category ORDER BY id')).map(r => ({
-    id: r.id, name: r.name, rateMode: r.rate_mode, ratePerKm: r.rate_per_km ?? undefined,
-    totalCost: r.total_cost ?? undefined, intervalKm: r.interval_km ?? undefined, active: !!r.active,
+  const categories = (await rows(db, 'SELECT * FROM category ORDER BY id')).map(row => ({
+    id: row.id, name: row.name, rateMode: row.rate_mode, ratePerKm: row.rate_per_km ?? undefined,
+    totalCost: row.total_cost ?? undefined, intervalKm: row.interval_km ?? undefined, active: !!row.active,
   }))
   const services = await rows(db, 'SELECT * FROM service ORDER BY id')
   const costs = await rows(db, 'SELECT * FROM day_cost')
   const days: Record<string, any> = {}
-  for (const d of await rows(db, 'SELECT * FROM day')) {
-    days[d.date] = {
-      date: d.date, km: d.km, note: d.note ?? undefined,
-      services: services.filter(s => s.day_date === d.date).map(s => ({ amount: s.amount, method: s.method, note: s.note ?? undefined })),
-      costs: costs.filter(c => c.day_date === d.date).map(c => ({ categoryId: c.category_id, name: c.category_name, rate: c.rate_applied, amount: c.amount })),
+  for (const day of await rows(db, 'SELECT * FROM day')) {
+    days[day.date] = {
+      date: day.date, km: day.km, note: day.note ?? undefined,
+      services: services.filter(service => service.day_date === day.date).map(service => ({ amount: service.amount, method: service.method, note: service.note ?? undefined })),
+      costs: costs.filter(cost => cost.day_date === day.date).map(cost => ({ categoryId: cost.category_id, name: cost.category_name, rate: cost.rate_applied, amount: cost.amount })),
     }
   }
   const movements = await rows(db, 'SELECT * FROM cash_movement ORDER BY id')
   const cash: Record<string, any> = {}
-  for (const c of await rows(db, 'SELECT * FROM cash_day')) {
-    cash[c.date] = {
-      date: c.date, opening: c.opening, openedAt: c.opened_at, closedAt: c.closed_at ?? undefined, counted: c.counted ?? undefined,
-      movements: movements.filter(m => m.date === c.date).map(m => ({ type: m.type, amount: m.amount, note: m.note ?? undefined })),
+  for (const cashDay of await rows(db, 'SELECT * FROM cash_day')) {
+    cash[cashDay.date] = {
+      date: cashDay.date, opening: cashDay.opening, openedAt: cashDay.opened_at, closedAt: cashDay.closed_at ?? undefined, counted: cashDay.counted ?? undefined,
+      movements: movements.filter(movement => movement.date === cashDay.date).map(movement => ({ type: movement.type, amount: movement.amount, note: movement.note ?? undefined })),
     }
   }
   return { categories, days, cash }
 }
 
-const KINDS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements']
+const KINDS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements', 'depositMovements']
 
 function statements(changes: Partial<Snapshot>) {
   const out: { statement: string; values: unknown[] }[] = []
   for (const kind of KINDS) {
-    for (const r of (changes[kind] ?? []) as Meta[]) {
+    for (const record of (changes[kind] ?? []) as Meta[]) {
       out.push({
         statement: 'INSERT OR REPLACE INTO record (kind, id, updated_at, deleted, data) VALUES (?,?,?,?,?)',
-        values: [kind, r.id, r.updatedAt, r.deleted ? 1 : 0, JSON.stringify(r)],
+        values: [kind, record.id, record.updatedAt, record.deleted ? 1 : 0, JSON.stringify(record)],
       })
     }
   }
@@ -70,14 +70,14 @@ async function migrate(db: SQLiteDBConnection) {
   await db.execute('CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);')
   const row = (await db.query("SELECT value FROM meta WHERE key = 'version'")).values?.[0]
   const current = row ? Number(row.value) : 0
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    await db.execute(MIGRATIONS[v]!)
-    if (v === 2 && current > 0) {
+  for (let version = current; version < MIGRATIONS.length; version++) {
+    await db.execute(MIGRATIONS[version]!)
+    if (version === 2 && current > 0) {
       // Había datos en el esquema anterior: pasarlos a registros con id único.
-      const set = statements(fromLegacy(await readLegacy(db)))
-      if (set.length) await db.executeSet(set)
+      const legacyStatements = statements(fromLegacy(await readLegacy(db)))
+      if (legacyStatements.length) await db.executeSet(legacyStatements)
     }
-    await db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)", [String(v + 1)])
+    await db.run("INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)", [String(version + 1)])
   }
 }
 
@@ -89,16 +89,16 @@ export async function createSqliteStore(): Promise<Store> {
 
   return {
     async load() {
-      const s = emptySnapshot()
-      for (const r of await rows(db, 'SELECT kind, data FROM record')) {
-        const list = s[r.kind as Collection] as Meta[] | undefined
-        list?.push(JSON.parse(r.data))
+      const snapshot = emptySnapshot()
+      for (const row of await rows(db, 'SELECT kind, data FROM record')) {
+        const list = snapshot[row.kind as Collection] as Meta[] | undefined
+        list?.push(JSON.parse(row.data))
       }
-      return s
+      return snapshot
     },
     async save(changes) {
-      const set = statements(changes)
-      if (set.length) await db.executeSet(set)
+      const changeStatements = statements(changes)
+      if (changeStatements.length) await db.executeSet(changeStatements)
     },
   }
 }

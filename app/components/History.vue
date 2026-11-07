@@ -8,13 +8,13 @@ const days = ref<DayRecord[]>([])
 const confirming = ref<string | null>(null)
 const { show } = useToast()
 
-const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
+const errorText = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 
 async function load() {
   try {
     days.value = await (await useTaurus()).repo.listDays()
-  } catch (e) {
-    show(errorText(e, 'No se pudo cargar el historial'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo cargar el historial'), 'error')
   }
 }
 onMounted(load)
@@ -31,15 +31,15 @@ async function remove(date: string) {
     confirming.value = null
     show('Día eliminado')
     await load()
-  } catch (e) {
-    show(errorText(e, 'No se pudo eliminar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo eliminar'), 'error')
   }
 }
 
-const fmt = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short' })
-const label = (iso: string) => fmt.format(new Date(`${iso}T12:00:00`))
-const places = (x: Service) => [x.origin, x.destination].filter(Boolean).join(' → ')
-const duration = (x: Service) => formatDuration(tripMinutes(x.startTime, x.endTime))
+const dateFormatter = new Intl.DateTimeFormat('es-CO', { weekday: 'short', day: 'numeric', month: 'short' })
+const label = (iso: string) => dateFormatter.format(new Date(`${iso}T12:00:00`))
+const places = (service: Service) => [service.origin, service.destination].filter(Boolean).join(' → ')
+const duration = (service: Service) => formatDuration(tripMinutes(service.startTime, service.endTime))
 </script>
 
 <template>
@@ -51,32 +51,37 @@ const duration = (x: Service) => formatDuration(tripMinutes(x.startTime, x.endTi
     </div>
 
     <TransitionGroup v-else name="list" tag="div" class="stack rel rise" style="gap: 10px">
-      <div v-for="d in days" :key="d.date" class="card dayc">
+      <div v-for="day in days" :key="day.date" class="card dayc">
         <div class="day">
-          <span class="icon-tile" :class="d.net >= 0 ? 'pos' : 'neg'"><CalendarCheck :size="20" /></span>
+          <span class="icon-tile" :class="day.net >= 0 ? 'pos' : 'neg'"><CalendarCheck :size="20" /></span>
           <div class="grow">
-            <b class="cap">{{ label(d.date) }}</b>
+            <b class="cap">{{ label(day.date) }}</b>
             <p class="muted small row" style="gap: 6px">
-              <Route :size="13" /> {{ d.km }} km · bruto {{ money(d.gross) }}
+              <Route :size="13" /> {{ day.km }} km · bruto {{ money(day.gross) }}
+            </p>
+            <p v-if="day.commission + day.commissionVat > 0" class="muted small">
+              Comisión inDrive {{ money(day.commission + day.commissionVat) }} · neto con comisión
             </p>
           </div>
-          <b class="num net" :class="d.net >= 0 ? 'pos' : 'neg'">{{ money(d.net) }}</b>
-          <button class="btn icon ghost" :class="{ danger: confirming === d.date }" :aria-label="confirming === d.date ? 'Confirmar' : 'Eliminar'" @click="remove(d.date)">
+          <b class="num net" :class="day.net >= 0 ? 'pos' : 'neg'">{{ money(day.net) }}</b>
+          <button class="btn icon ghost" :class="{ danger: confirming === day.date }" :aria-label="confirming === day.date ? 'Confirmar' : 'Eliminar'" @click="remove(day.date)">
             <Trash2 :size="18" />
           </button>
         </div>
-        <ul v-if="d.services.length" class="trips">
-          <li v-for="(x, i) in d.services" :key="x.id ?? i">
+        <ul v-if="day.services.length" class="trips">
+          <li v-for="(service, i) in day.services" :key="service.id ?? i">
             <div class="row between">
               <span class="small">
-                <template v-if="x.startTime && x.endTime">{{ x.startTime }}–{{ x.endTime }}<template v-if="duration(x)"> · {{ duration(x) }}</template></template>
+                <template v-if="service.startTime && service.endTime">{{ service.startTime }}–{{ service.endTime }}<template v-if="duration(service)"> · {{ duration(service) }}</template></template>
                 <template v-else>Servicio</template>
-                <template v-if="x.distanceKm !== undefined"> · {{ x.distanceKm }} km</template>
+                <template v-if="service.distanceKm !== undefined"> · {{ service.distanceKm }} km</template>
               </span>
-              <b class="num small">{{ money(x.amount) }}</b>
+              <b class="num small">{{ money(service.amount) }}</b>
             </div>
-            <p v-if="(x.bonus ?? 0) > 0" class="muted small">+ {{ money(x.bonus!) }} bonus</p>
-            <p v-if="places(x)" class="muted small">{{ places(x) }}</p>
+            <p v-if="(service.bonus ?? 0) > 0" class="muted small">+ {{ money(service.bonus!) }} bonus</p>
+            <p v-if="service.isIndrive === false" class="muted small">Propio</p>
+            <p v-else-if="(service.commission ?? 0) > 0" class="muted small">Comisión {{ money(service.commission!) }} + IVA {{ money(service.commissionVat ?? 0) }}</p>
+            <p v-if="places(service)" class="muted small">{{ places(service) }}</p>
           </li>
         </ul>
       </div>

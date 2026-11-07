@@ -22,26 +22,26 @@ const old = {
 
 describe('migración del formato anterior', () => {
   it('convierte ids numéricos y asigna ids únicos', () => {
-    const s = fromLegacy(old)
-    expect(s.categories.map(c => c.id)).toEqual(['cat-gasolina', 'cat-servicio-moto', 'cat-legacy-3'])
-    expect(s.days[0]!.costs.map(c => c.categoryId)).toEqual(['cat-gasolina', 'cat-legacy-3'])
-    expect(s.services).toHaveLength(2)
-    expect(s.services[0]!.method).toBe('cash')
-    expect(new Set(s.services.map(x => x.id)).size).toBe(2)
-    expect(s.movements[0]!.id).not.toBe('1')
-    expect(s.cash[0]!.id).toBe('2026-10-15')
+    const snapshot = fromLegacy(old)
+    expect(snapshot.categories.map(category => category.id)).toEqual(['cat-gasolina', 'cat-servicio-moto', 'cat-legacy-3'])
+    expect(snapshot.days[0]!.costs.map(cost => cost.categoryId)).toEqual(['cat-gasolina', 'cat-legacy-3'])
+    expect(snapshot.services).toHaveLength(2)
+    expect(snapshot.services[0]!.method).toBe('cash')
+    expect(new Set(snapshot.services.map(service => service.id)).size).toBe(2)
+    expect(snapshot.movements[0]!.id).not.toBe('1')
+    expect(snapshot.cash[0]!.id).toBe('2026-10-15')
   })
 
   it('el almacén en localStorage migra solo y conserva los datos', async () => {
     const mem = new Map<string, string>([['taurus-state', JSON.stringify(old)]])
-    const storage = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v) }
-    const t = createTaurus(createMemoryStore(storage))
-    await t.init()
-    const d = (await t.repo.getDay('2026-10-15'))!
-    expect(d.gross).toBe(170000)
-    expect(d.net).toBe(161200)
-    expect((await t.repo.getCash('2026-10-15'))!.movements[0]!.amount).toBe(8000)
-    expect(await t.repo.listCategories()).toHaveLength(3)
+    const storage = { getItem: (key: string) => mem.get(key) ?? null, setItem: (key: string, value: string) => void mem.set(key, value) }
+    const taurus = createTaurus(createMemoryStore(storage))
+    await taurus.init()
+    const day = (await taurus.repo.getDay('2026-10-15'))!
+    expect(day.gross).toBe(170000)
+    expect(day.net).toBe(161200)
+    expect((await taurus.repo.getCash('2026-10-15'))!.movements[0]!.amount).toBe(8000)
+    expect(await taurus.repo.listCategories()).toHaveLength(3)
     expect(JSON.parse(mem.get('taurus-state')!).version).toBe(2)
   })
 })

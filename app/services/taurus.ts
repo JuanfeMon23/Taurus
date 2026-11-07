@@ -1,10 +1,11 @@
 import { computeDay, type Category } from '../utils/calc'
+import { DEFAULT_RATES, dayNet, sumCommission, type CommissionRates } from '../utils/commission'
 import { tripTotal } from '../utils/trip'
 import { EPOCH, newId, now } from './ids'
 import { upsert } from './memoryStore'
 import { same } from './merge'
 import type {
-  CashDay, CashMeta, CategoryRec, DayMeta, DayRecord, MovementRec, NewCategory, Repo, Service, ServiceRec, Snapshot, Store,
+  CashDay, CashMeta, CategoryRec, DayMeta, DayRecord, DepositMovement, DepositMovementRec, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Snapshot, Store,
 } from './types'
 
 export interface DayInput {
@@ -28,114 +29,146 @@ function tripFields<T extends object>(target: T, from: Service): T {
   if (from.distanceKm !== undefined && from.distanceKm !== null) out.distanceKm = from.distanceKm
   if (from.origin) out.origin = from.origin
   if (from.destination) out.destination = from.destination
+  if (from.isIndrive !== undefined) out.isIndrive = from.isIndrive
+  if (from.commission !== undefined) out.commission = from.commission
+  if (from.commissionVat !== undefined) out.commissionVat = from.commissionVat
   return target
 }
 
-const live = <T extends { deleted?: boolean }>(xs: T[]) => xs.filter(x => !x.deleted)
+const RATES_ID = 'rates'
+
+const live = <T extends { deleted?: boolean }>(items: T[]) => items.filter(item => !item.deleted)
 
 /**
  * Sincroniza una lista hija (servicios de un día, movimientos de una caja):
  * conserva ids, actualiza solo lo que cambió y deja lápida de lo que se quitó.
  */
 function diffChildren<R extends { id: string; updatedAt: string; deleted?: boolean }>(
-  current: R[], input: (Partial<R> & { id?: string })[], build: (x: any, id: string, t: string) => R, t: string,
+  current: R[], input: (Partial<R> & { id?: string })[], build: (item: any, id: string, editedAt: string) => R, timestamp: string,
 ): R[] {
   const out: R[] = []
-  const byId = new Map(current.map(r => [r.id, r]))
+  const byId = new Map(current.map(record => [record.id, record]))
   const kept = new Set<string>()
-  for (const x of input) {
-    const prev = x.id ? byId.get(x.id) : undefined
-    const id = prev ? prev.id : newId()
+  for (const item of input) {
+    const previous = item.id ? byId.get(item.id) : undefined
+    const id = previous ? previous.id : newId()
     kept.add(id)
-    const next = build(x, id, t)
-    if (!prev || !same({ ...prev, updatedAt: '' }, { ...next, updatedAt: '' })) out.push(next)
+    const next = build(item, id, timestamp)
+    if (!previous || !same({ ...previous, updatedAt: '' }, { ...next, updatedAt: '' })) out.push(next)
   }
-  for (const r of current) if (!kept.has(r.id)) out.push({ ...r, deleted: true, updatedAt: t })
+  for (const record of current) if (!kept.has(record.id)) out.push({ ...record, deleted: true, updatedAt: timestamp })
   return out
 }
 
 export function createTaurus(store: Store, opts: { onChange?: () => void } = {}) {
   let state: Snapshot | null = null
-  const s = async () => (state ??= await store.load())
+  const loadState = async () => (state ??= await store.load())
 
   async function put(changes: Partial<Snapshot>, silent = false) {
-    upsert(await s(), changes)
+    upsert(await loadState(), changes)
     await store.save(changes)
     if (!silent) opts.onChange?.()
   }
 
-  function dayView(st: Snapshot, date: string): DayRecord | null {
-    const meta = st.days.find(d => d.id === date && !d.deleted)
-    const services = live(st.services).filter(x => x.date === date)
+  function dayView(snapshot: Snapshot, date: string): DayRecord | null {
+    const meta = snapshot.days.find(day => day.id === date && !day.deleted)
+    const services = live(snapshot.services).filter(service => service.date === date)
     if (!meta && !services.length) return null
     const costs = meta?.costs ?? []
-    const gross = services.reduce((t, x) => t + tripTotal(x), 0)
-    const totalCost = costs.reduce((t, c) => t + c.amount, 0)
+    const gross = services.reduce((sum, service) => sum + tripTotal(service), 0)
+    const totalCost = costs.reduce((sum, cost) => sum + cost.amount, 0)
+    const { commission, commissionVat } = sumCommission(services)
     return {
-      date, km: meta?.km ?? 0, note: meta?.note, costs, gross, totalCost, net: gross - totalCost,
-      services: services.map(x => tripFields({ id: x.id, amount: x.amount, method: x.method, note: x.note }, x)),
+      date, km: meta?.km ?? 0, note: meta?.note, costs, gross, totalCost, commission, commissionVat,
+      net: dayNet(gross, totalCost, commission, commissionVat),
+      services: services.map(service => tripFields({ id: service.id, amount: service.amount, method: service.method, note: service.note }, service)),
     }
   }
 
-  function cashView(st: Snapshot, date: string): CashDay | null {
-    const m = st.cash.find(c => c.id === date && !c.deleted)
-    if (!m) return null
+  function cashView(snapshot: Snapshot, date: string): CashDay | null {
+    const cashMeta = snapshot.cash.find(cashRecord => cashRecord.id === date && !cashRecord.deleted)
+    if (!cashMeta) return null
     return {
-      date, opening: m.opening, openedAt: m.openedAt, closedAt: m.closedAt, counted: m.counted,
-      movements: live(st.movements).filter(x => x.date === date).map(x => ({ id: x.id, type: x.type, amount: x.amount, note: x.note })),
+      date, opening: cashMeta.opening, openedAt: cashMeta.openedAt, closedAt: cashMeta.closedAt, counted: cashMeta.counted,
+      ...(cashMeta.toDeposit !== undefined ? { toDeposit: cashMeta.toDeposit } : {}),
+      movements: live(snapshot.movements).filter(movement => movement.date === date).map(movement => ({ id: movement.id, type: movement.type, amount: movement.amount, note: movement.note })),
     }
   }
 
   const repo: Repo = {
     async listCategories(): Promise<Category[]> {
-      return live((await s()).categories).map(c => ({ ...c }))
+      return live((await loadState()).categories).map(category => ({ ...category }))
     },
-    async saveCategory(c: NewCategory) {
-      const st = await s()
-      const prev = c.id ? st.categories.find(x => x.id === c.id) : undefined
-      const rec: CategoryRec = { ...prev, ...c, id: c.id ?? newId(), updatedAt: now(), deleted: undefined } as CategoryRec
-      delete rec.deleted
-      await put({ categories: [rec] })
-      return { ...rec }
+    async saveCategory(category: NewCategory) {
+      const snapshot = await loadState()
+      const previous = category.id ? snapshot.categories.find(existing => existing.id === category.id) : undefined
+      const record: CategoryRec = { ...previous, ...category, id: category.id ?? newId(), updatedAt: now(), deleted: undefined } as CategoryRec
+      delete record.deleted
+      await put({ categories: [record] })
+      return { ...record }
     },
     async listDays(from, to) {
-      const st = await s()
-      const dates = new Set([...live(st.days).map(d => d.date), ...live(st.services).map(x => x.date)])
+      const snapshot = await loadState()
+      const dates = new Set([...live(snapshot.days).map(day => day.date), ...live(snapshot.services).map(service => service.date)])
       return [...dates]
-        .filter(d => (!from || d >= from) && (!to || d <= to))
-        .sort((a, b) => b.localeCompare(a))
-        .map(d => dayView(st, d)!)
+        .filter(date => (!from || date >= from) && (!to || date <= to))
+        .sort((dateA, dateB) => dateB.localeCompare(dateA))
+        .map(date => dayView(snapshot, date)!)
     },
     async getDay(date) {
-      return dayView(await s(), date)
+      return dayView(await loadState(), date)
     },
     async deleteDay(date) {
-      const st = await s()
-      const t = now()
-      const days = st.days.filter(d => d.id === date && !d.deleted).map(d => ({ ...d, deleted: true, updatedAt: t }))
-      const services = live(st.services).filter(x => x.date === date).map(x => ({ ...x, deleted: true, updatedAt: t }))
+      const snapshot = await loadState()
+      const timestamp = now()
+      const days = snapshot.days.filter(day => day.id === date && !day.deleted).map(day => ({ ...day, deleted: true, updatedAt: timestamp }))
+      const services = live(snapshot.services).filter(service => service.date === date).map(service => ({ ...service, deleted: true, updatedAt: timestamp }))
       await put({ days, services })
     },
     async getCash(date) {
-      return cashView(await s(), date)
+      return cashView(await loadState(), date)
     },
     async listCash() {
-      const st = await s()
-      return live(st.cash).map(c => cashView(st, c.date)!).sort((a, b) => a.date.localeCompare(b.date))
+      const snapshot = await loadState()
+      return live(snapshot.cash).map(cashRecord => cashView(snapshot, cashRecord.date)!).sort((cashA, cashB) => cashA.date.localeCompare(cashB.date))
     },
-    async putCash(c: CashDay) {
-      const st = await s()
-      const t = now()
+    async putCash(cashDay: CashDay) {
+      const snapshot = await loadState()
+      const timestamp = now()
       const meta: CashMeta = {
-        id: c.date, date: c.date, opening: c.opening, openedAt: c.openedAt, closedAt: c.closedAt, counted: c.counted, updatedAt: t,
+        id: cashDay.date, date: cashDay.date, opening: cashDay.opening, openedAt: cashDay.openedAt, closedAt: cashDay.closedAt, counted: cashDay.counted, updatedAt: timestamp,
       }
+      if (cashDay.toDeposit !== undefined) meta.toDeposit = cashDay.toDeposit
       const movements = diffChildren<MovementRec>(
-        live(st.movements).filter(x => x.date === c.date),
-        c.movements.map(m => ({ ...m, id: m.id || undefined })),
-        (x, id, ts) => ({ id, date: c.date, type: x.type, amount: x.amount, note: x.note, updatedAt: ts }),
-        t,
+        live(snapshot.movements).filter(movement => movement.date === cashDay.date),
+        cashDay.movements.map(movement => ({ ...movement, id: movement.id || undefined })),
+        (item, id, editedAt) => ({ id, date: cashDay.date, type: item.type, amount: item.amount, note: item.note, updatedAt: editedAt }),
+        timestamp,
       )
       await put({ cash: [meta], movements })
+    },
+    async listDepositMovements() {
+      return live((await loadState()).depositMovements)
+        .map(movement => ({ id: movement.id, date: movement.date, amount: movement.amount, note: movement.note }) as DepositMovement)
+        .sort((movementA, movementB) => movementB.date.localeCompare(movementA.date))
+    },
+    async saveDepositMovement(movement) {
+      const record: DepositMovementRec = { id: movement.id ?? newId(), date: movement.date, amount: movement.amount, note: movement.note || undefined, updatedAt: now() }
+      await put({ depositMovements: [record] })
+      return { id: record.id, date: record.date, amount: record.amount, note: record.note }
+    },
+    async getRates(): Promise<CommissionRates> {
+      const record = live((await loadState()).settings).find(setting => setting.id === RATES_ID)
+      return record ? { commissionRate: record.commissionRate, vatRate: record.vatRate } : { ...DEFAULT_RATES }
+    },
+    async saveRates(rates: CommissionRates) {
+      const record: SettingsRec = { id: RATES_ID, commissionRate: rates.commissionRate, vatRate: rates.vatRate, updatedAt: now() }
+      await put({ settings: [record] })
+      return { commissionRate: record.commissionRate, vatRate: record.vatRate }
+    },
+    async deleteDepositMovement(id) {
+      const previous = (await loadState()).depositMovements.find(movement => movement.id === id && !movement.deleted)
+      if (previous) await put({ depositMovements: [{ ...previous, deleted: true, updatedAt: now() }] })
     },
   }
 
@@ -144,39 +177,39 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
 
     /** Siembra Gasolina y Servicio (ids fijos, fecha mínima) si no hay categorías. */
     async init() {
-      const st = await s()
-      if (st.categories.length === 0) await put({ categories: structuredClone(SEED) }, true)
+      const snapshot = await loadState()
+      if (snapshot.categories.length === 0) await put({ categories: structuredClone(SEED) }, true)
     },
 
     /** Guarda el día congelando las tarifas de las categorías activas ahora. */
     async saveDay(input: DayInput): Promise<DayRecord> {
-      const st = await s()
-      const t = now()
-      const categories = live(st.categories)
+      const snapshot = await loadState()
+      const timestamp = now()
+      const categories = live(snapshot.categories)
       const { costs } = computeDay({ services: input.services.map(tripTotal), km: input.km, categories })
-      const prev = st.days.find(d => d.id === input.date && !d.deleted)
-      const meta: DayMeta = { id: input.date, date: input.date, km: input.km, note: input.note, costs, updatedAt: t }
-      const changedMeta = !prev || !same({ ...prev, updatedAt: '' }, { ...meta, updatedAt: '' })
+      const previous = snapshot.days.find(day => day.id === input.date && !day.deleted)
+      const meta: DayMeta = { id: input.date, date: input.date, km: input.km, note: input.note, costs, updatedAt: timestamp }
+      const changedMeta = !previous || !same({ ...previous, updatedAt: '' }, { ...meta, updatedAt: '' })
       const services = diffChildren<ServiceRec>(
-        live(st.services).filter(x => x.date === input.date),
+        live(snapshot.services).filter(service => service.date === input.date),
         input.services,
-        (x, id, ts) => tripFields({ id, date: input.date, amount: x.amount, method: x.method ?? 'cash', note: x.note, updatedAt: ts }, x),
-        t,
+        (item, id, editedAt) => tripFields({ id, date: input.date, amount: item.amount, method: item.method ?? 'cash', note: item.note, updatedAt: editedAt }, item),
+        timestamp,
       )
       await put({ days: changedMeta ? [meta] : [], services })
-      return dayView(st, input.date)!
+      return dayView(snapshot, input.date)!
     },
 
     /** Recalcula un día ya guardado con las tarifas actuales. */
     async recalcDay(date: string): Promise<DayRecord | null> {
-      const day = dayView(await s(), date)
+      const day = dayView(await loadState(), date)
       if (!day) return null
       return this.saveDay({ date, km: day.km, note: day.note, services: day.services })
     },
 
     /** Estado completo, con lápidas (para sincronizar). */
     async snapshot(): Promise<Snapshot> {
-      return structuredClone(await s())
+      return structuredClone(await loadState())
     },
 
     /** Aplica registros que vienen de otro dispositivo (sin disparar otra subida). */

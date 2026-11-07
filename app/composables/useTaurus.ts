@@ -17,9 +17,9 @@ export function useTaurus(): Promise<Taurus> {
       store = createApiStore(useRuntimeConfig().public.apiBase as string)
       await importLocalOnce(store, localStorage) // antes de init(): la siembra no debe ocultar un backend vacío
     }
-    const t = createTaurus(store, { onChange: emitDataChange })
-    await t.init()
-    return t
+    const taurus = createTaurus(store, { onChange: emitDataChange })
+    await taurus.init()
+    return taurus
   })()
   return instance
 }

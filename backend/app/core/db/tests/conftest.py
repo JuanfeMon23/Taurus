@@ -47,8 +47,8 @@ async def session(test_url: str) -> AsyncIterator[AsyncSession]:
     """Sesión con rollback al final: ningún test deja datos."""
     engine = create_async_engine(test_url)
     async with engine.connect() as conn:
-        trans = await conn.begin()
-        async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as s:
-            yield s
-        await trans.rollback()
+        transaction = await conn.begin()
+        async with AsyncSession(bind=conn, join_transaction_mode="create_savepoint") as db_session:
+            yield db_session
+        await transaction.rollback()
     await engine.dispose()

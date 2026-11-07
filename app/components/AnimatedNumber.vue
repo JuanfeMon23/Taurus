@@ -12,12 +12,12 @@ watch(() => props.value, (to) => {
     shown.value = to
     return
   }
-  const t0 = performance.now()
+  const startTime = performance.now()
   const dur = 650
   const step = (now: number) => {
-    const p = Math.min((now - t0) / dur, 1)
-    shown.value = from + (to - from) * (1 - Math.pow(1 - p, 3))
-    if (p < 1) raf = requestAnimationFrame(step)
+    const progress = Math.min((now - startTime) / dur, 1)
+    shown.value = from + (to - from) * (1 - Math.pow(1 - progress, 3))
+    if (progress < 1) raf = requestAnimationFrame(step)
   }
   raf = requestAnimationFrame(step)
 })

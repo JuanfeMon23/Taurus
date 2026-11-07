@@ -10,32 +10,32 @@ export function seededCategoryId(name: string): string | null {
 
 /** Convierte el formato anterior (ids numéricos, días con servicios anidados) al de registros con id único. */
 export function fromLegacy(old: any): Snapshot {
-  const s = emptySnapshot()
-  const t = now()
-  const catId = new Map<number, string>()
+  const snapshot = emptySnapshot()
+  const timestamp = now()
+  const categoryIdByLegacyId = new Map<number, string>()
 
-  for (const c of old?.categories ?? []) {
-    const id = seededCategoryId(String(c.name)) ?? `cat-legacy-${c.id}`
-    catId.set(Number(c.id), id)
-    s.categories.push({ ...c, id, updatedAt: t })
+  for (const category of old?.categories ?? []) {
+    const id = seededCategoryId(String(category.name)) ?? `cat-legacy-${category.id}`
+    categoryIdByLegacyId.set(Number(category.id), id)
+    snapshot.categories.push({ ...category, id, updatedAt: timestamp })
   }
-  const mapCat = (n: unknown) => catId.get(Number(n)) ?? `cat-legacy-${n}`
+  const mapCategoryId = (legacyId: unknown) => categoryIdByLegacyId.get(Number(legacyId)) ?? `cat-legacy-${legacyId}`
 
-  for (const d of Object.values<any>(old?.days ?? {})) {
-    s.days.push({
-      id: d.date, date: d.date, km: d.km ?? 0, note: d.note, updatedAt: t,
-      costs: (d.costs ?? []).map((c: any) => ({ ...c, categoryId: mapCat(c.categoryId) })),
+  for (const day of Object.values<any>(old?.days ?? {})) {
+    snapshot.days.push({
+      id: day.date, date: day.date, km: day.km ?? 0, note: day.note, updatedAt: timestamp,
+      costs: (day.costs ?? []).map((cost: any) => ({ ...cost, categoryId: mapCategoryId(cost.categoryId) })),
     })
-    for (const sv of d.services ?? []) {
-      s.services.push({ id: newId(), date: d.date, amount: sv.amount, method: sv.method ?? 'cash', note: sv.note, updatedAt: t })
+    for (const service of day.services ?? []) {
+      snapshot.services.push({ id: newId(), date: day.date, amount: service.amount, method: service.method ?? 'cash', note: service.note, updatedAt: timestamp })
     }
   }
 
-  for (const c of Object.values<any>(old?.cash ?? {})) {
-    s.cash.push({ id: c.date, date: c.date, opening: c.opening, openedAt: c.openedAt, closedAt: c.closedAt, counted: c.counted, updatedAt: t })
-    for (const m of c.movements ?? []) {
-      s.movements.push({ id: newId(), date: c.date, type: m.type, amount: m.amount, note: m.note, updatedAt: t })
+  for (const cashDay of Object.values<any>(old?.cash ?? {})) {
+    snapshot.cash.push({ id: cashDay.date, date: cashDay.date, opening: cashDay.opening, openedAt: cashDay.openedAt, closedAt: cashDay.closedAt, counted: cashDay.counted, updatedAt: timestamp })
+    for (const movement of cashDay.movements ?? []) {
+      snapshot.movements.push({ id: newId(), date: cashDay.date, type: movement.type, amount: movement.amount, note: movement.note, updatedAt: timestamp })
     }
   }
-  return s
+  return snapshot
 }

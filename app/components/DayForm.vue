@@ -2,6 +2,7 @@
 import { ArrowLeftRight, Banknote, CalendarDays, Check, Clock, Gift, MapPin, NotebookPen, Pencil, Route, Trash2, TrendingDown, TrendingUp, X } from 'lucide-vue-next'
 import { computeDay, type Category } from '../utils/calc'
 import { dayKm, dayTotals, extraKmFrom, removeTrip, sortTrips, tripSummary, upsertTrip } from '../utils/dayTrips'
+import { computeCommission, DEFAULT_RATES, type CommissionRates } from '../utils/commission'
 import { money, rate, todayISO } from '../utils/format'
 import { categoryIcon } from '../utils/icons'
 import { formatDuration, sumDistance, tripMinutes, tripTotal, validateTrip, type TripErrors } from '../utils/trip'
@@ -17,10 +18,11 @@ type Form = {
   amount: number | null
   bonus: number | null
   method: PayMethod
+  isIndrive: boolean
   origin: string
   destination: string
 }
-const blank = (): Form => ({ startTime: '', endTime: '', distanceKm: null, amount: null, bonus: null, method: 'cash', origin: '', destination: '' })
+const blank = (): Form => ({ startTime: '', endTime: '', distanceKm: null, amount: null, bonus: null, method: 'cash', isIndrive: true, origin: '', destination: '' })
 
 const date = ref(todayISO())
 const extraKm = ref<number | null>(null)
@@ -28,6 +30,7 @@ const note = ref('')
 const trips = ref<Service[]>([])
 const form = ref<Form>(blank())
 const categories = ref<Category[]>([])
+const rates = ref<CommissionRates>({ ...DEFAULT_RATES })
 const saving = ref(false)
 const cashKey = ref(0) // se incrementa al cambiar los viajes para recargar la caja
 const attempted = ref(false)
@@ -36,7 +39,7 @@ const firstField = ref<HTMLInputElement | null>(null)
 const { show } = useToast()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
-const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
+const errorText = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 
 function resetForm() {
   form.value = blank()
@@ -59,21 +62,25 @@ onMounted(async () => {
   try {
     taurus = await useTaurus()
     categories.value = await taurus.repo.listCategories()
+    rates.value = await taurus.repo.getRates()
     await load()
-  } catch (e) {
-    show(errorText(e, 'No se pudo cargar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo cargar'), 'error')
   }
 })
 // KeepAlive: refrescar tarifas si cambiaron en la pestaña Tarifas.
 onActivated(async () => {
-  if (taurus) categories.value = await taurus.repo.listCategories()
+  if (taurus) {
+    categories.value = await taurus.repo.listCategories()
+    rates.value = await taurus.repo.getRates()
+  }
 })
 watch(date, async () => {
   if (!taurus) return
   try {
     await load()
-  } catch (e) {
-    show(errorText(e, 'No se pudo cargar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo cargar'), 'error')
   }
 })
 
@@ -86,8 +93,10 @@ const margin = computed(() => (totals.value.gross > 0 ? Math.round((totals.value
 
 const tripKm = computed(() => sumDistance(trips.value))
 const duration = computed(() => formatDuration(tripMinutes(form.value.startTime, form.value.endTime)))
+// Vista previa en vivo; al guardar se calcula con las tasas vigentes y queda fija en el viaje.
+const preview = computed(() => computeCommission(typeof form.value.amount === 'number' ? form.value.amount : 0, form.value.isIndrive, rates.value))
 const errors = computed<TripErrors>(() => validateTrip(form.value))
-const showErr = (f: keyof TripErrors) => (attempted.value ? errors.value[f] : undefined)
+const showErr = (field: keyof TripErrors) => (attempted.value ? errors.value[field] : undefined)
 
 async function persist(services: Service[]) {
   await taurus.saveDay({ date: date.value, km: dayKm(services, extraKm.value ?? 0), note: note.value || undefined, services })
@@ -101,62 +110,65 @@ async function saveTrip() {
     show('Revisa los campos marcados', 'error')
     return
   }
-  const f = form.value
+  const formValues = form.value
   const trip: Service = {
-    id: f.id,
-    amount: f.amount as number,
-    bonus: typeof f.bonus === 'number' && f.bonus > 0 ? f.bonus : undefined,
-    method: f.method,
-    startTime: f.startTime,
-    endTime: f.endTime,
-    distanceKm: f.distanceKm as number,
-    origin: f.origin.trim() || undefined,
-    destination: f.destination.trim() || undefined,
+    id: formValues.id,
+    amount: formValues.amount as number,
+    bonus: typeof formValues.bonus === 'number' && formValues.bonus > 0 ? formValues.bonus : undefined,
+    method: formValues.method,
+    isIndrive: formValues.isIndrive,
+    ...computeCommission(formValues.amount as number, formValues.isIndrive, rates.value),
+    startTime: formValues.startTime,
+    endTime: formValues.endTime,
+    distanceKm: formValues.distanceKm as number,
+    origin: formValues.origin.trim() || undefined,
+    destination: formValues.destination.trim() || undefined,
   }
   saving.value = true
   try {
-    const editing = !!f.id
+    const editing = !!formValues.id
     await persist(upsertTrip(trips.value, trip))
     show(editing ? 'Viaje actualizado' : 'Viaje guardado')
     resetForm()
-  } catch (e) {
-    show(errorText(e, 'No se pudo guardar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo guardar'), 'error')
   } finally {
     saving.value = false
   }
 }
 
-function edit(x: Service) {
+function edit(trip: Service) {
   form.value = {
-    id: x.id,
-    startTime: x.startTime ?? '',
-    endTime: x.endTime ?? '',
-    distanceKm: x.distanceKm ?? null,
-    amount: x.amount,
-    bonus: x.bonus ?? null,
-    method: x.method ?? 'cash',
-    origin: x.origin ?? '',
-    destination: x.destination ?? '',
+    id: trip.id,
+    startTime: trip.startTime ?? '',
+    endTime: trip.endTime ?? '',
+    distanceKm: trip.distanceKm ?? null,
+    amount: trip.amount,
+    bonus: trip.bonus ?? null,
+    method: trip.method ?? 'cash',
+    isIndrive: trip.isIndrive !== false,
+    origin: trip.origin ?? '',
+    destination: trip.destination ?? '',
   }
   attempted.value = false
   nextTick(() => firstField.value?.focus())
 }
 
-async function removeOne(x: Service) {
-  if (!x.id) return
-  if (confirming.value !== x.id) {
-    confirming.value = x.id
-    const id = x.id
+async function removeOne(trip: Service) {
+  if (!trip.id) return
+  if (confirming.value !== trip.id) {
+    confirming.value = trip.id
+    const id = trip.id
     setTimeout(() => confirming.value === id && (confirming.value = null), 2500)
     return
   }
   try {
-    const wasEditing = form.value.id === x.id
-    await persist(removeTrip(trips.value, x.id))
+    const wasEditing = form.value.id === trip.id
+    await persist(removeTrip(trips.value, trip.id))
     show('Viaje eliminado')
     if (wasEditing) resetForm()
-  } catch (e) {
-    show(errorText(e, 'No se pudo eliminar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo eliminar'), 'error')
   }
 }
 
@@ -166,8 +178,8 @@ async function saveMeta() {
   try {
     await taurus.saveDay({ date: date.value, km: totalKm.value, note: note.value || undefined, services: trips.value })
     cashKey.value++
-  } catch (e) {
-    show(errorText(e, 'No se pudo guardar'), 'error')
+  } catch (error) {
+    show(errorText(error, 'No se pudo guardar'), 'error')
   }
 }
 </script>
@@ -253,6 +265,13 @@ async function saveMeta() {
           </button>
         </div>
 
+        <label class="check">
+          <input v-model="form.isIndrive" type="checkbox">
+          <span>Viaje inDrive</span>
+        </label>
+        <p v-if="form.isIndrive" class="muted small num" aria-live="polite">Comisión {{ money(preview.commission) }} + IVA {{ money(preview.commissionVat) }}</p>
+        <p v-else class="muted small">Viaje propio: sin comisión.</p>
+
         <label class="field">
           <span>Bonus / propina (opcional)</span>
           <div class="input-icon">
@@ -299,51 +318,54 @@ async function saveMeta() {
           <div><span>Bruto</span><b><AnimatedNumber :value="totals.gross" /></b></div>
           <div v-if="totals.bonus > 0"><span>Bonus</span><b><AnimatedNumber :value="totals.bonus" /></b></div>
           <div><span>Costos</span><b><AnimatedNumber :value="totals.totalCost" /></b></div>
+          <div v-if="totals.commission + totals.commissionVat > 0"><span>Comisión inDrive</span><b><AnimatedNumber :value="totals.commission + totals.commissionVat" /></b></div>
         </div>
       </div>
 
       <div class="card stack" style="gap: 12px">
         <span class="title">Apartar para costos</span>
-        <div v-for="c in result.costs" :key="c.categoryId" class="cost">
+        <div v-for="costLine in result.costs" :key="costLine.categoryId" class="cost">
           <div class="row">
-            <span class="icon-tile info"><component :is="categoryIcon(c.name)" :size="20" /></span>
+            <span class="icon-tile info"><component :is="categoryIcon(costLine.name)" :size="20" /></span>
             <div class="grow">
-              <div class="row between"><b>{{ c.name }}</b><b class="num">− {{ money(c.amount) }}</b></div>
-              <span class="muted small">{{ rate(c.rate) }}</span>
+              <div class="row between"><b>{{ costLine.name }}</b><b class="num">− {{ money(costLine.amount) }}</b></div>
+              <span class="muted small">{{ rate(costLine.rate) }}</span>
             </div>
           </div>
-          <div class="bar"><i :style="{ width: costShare(c.amount) + '%' }" /></div>
+          <div class="bar"><i :style="{ width: costShare(costLine.amount) + '%' }" /></div>
         </div>
         <p v-if="!result.costs.length" class="muted small">No hay categorías de costo activas.</p>
       </div>
 
-      <CashPanel :date="date" :refresh-key="cashKey" />
+      <CashPanel :date="date" :refresh-key="cashKey" compact />
     </div>
 
     <!-- Columna derecha: viajes del día -->
-    <div class="stack">
-      <div class="card stack" style="gap: 10px">
+    <div class="stack trips-col">
+      <div class="card stack trips-card" style="gap: 10px">
         <span class="title">Viajes del día</span>
         <p v-if="!sorted.length" class="muted small">Aún no hay viajes en este día.</p>
-        <TransitionGroup v-else name="list" tag="ul" class="trip-list rel">
-          <li v-for="(x, i) in sorted" :key="x.id ?? i" class="trip" :class="{ active: form.id && form.id === x.id }">
+        <TransitionGroup v-else name="list" tag="ul" class="trip-list trip-scroll rel">
+          <li v-for="(trip, i) in sorted" :key="trip.id ?? i" class="trip" :class="{ active: form.id && form.id === trip.id }">
             <div class="grow">
               <div class="row between">
                 <b class="small">
-                  <template v-if="tripSummary(x).schedule">{{ tripSummary(x).schedule }}</template>
+                  <template v-if="tripSummary(trip).schedule">{{ tripSummary(trip).schedule }}</template>
                   <template v-else>Servicio</template>
-                  <span v-if="tripSummary(x).duration" class="muted"> · {{ tripSummary(x).duration }}</span>
+                  <span v-if="tripSummary(trip).duration" class="muted dur"> · {{ tripSummary(trip).duration }}</span>
                 </b>
-                <b class="num">{{ money(x.amount) }}</b>
+                <b class="num">{{ money(trip.amount) }}</b>
               </div>
-              <p v-if="(x.bonus ?? 0) > 0" class="muted small">+ {{ money(x.bonus!) }} bonus</p>
+              <p v-if="(trip.bonus ?? 0) > 0" class="muted small">+ {{ money(trip.bonus!) }} bonus</p>
               <p class="muted small">
-                <template v-if="x.distanceKm !== undefined">{{ x.distanceKm }} km · </template>{{ x.method === 'transfer' ? 'Transferencia' : 'Efectivo' }}
+                <template v-if="trip.distanceKm !== undefined">{{ trip.distanceKm }} km · </template>{{ trip.method === 'transfer' ? 'Transferencia' : 'Efectivo' }}
               </p>
-              <p v-if="tripSummary(x).route" class="muted small">{{ tripSummary(x).route }}</p>
+              <p v-if="trip.isIndrive === false" class="muted small">Propio</p>
+              <p v-else-if="(trip.commission ?? 0) > 0" class="muted small num">Comisión {{ money(trip.commission!) }} + IVA {{ money(trip.commissionVat ?? 0) }}</p>
+              <p v-if="tripSummary(trip).route" class="muted small">{{ tripSummary(trip).route }}</p>
             </div>
-            <button type="button" class="btn icon ghost" aria-label="Editar viaje" @click="edit(x)"><Pencil :size="18" /></button>
-            <button type="button" class="btn icon ghost" :class="{ danger: confirming === x.id }" :aria-label="confirming === x.id ? 'Confirmar eliminación' : 'Eliminar viaje'" @click="removeOne(x)">
+            <button type="button" class="btn icon ghost" aria-label="Editar viaje" @click="edit(trip)"><Pencil :size="18" /></button>
+            <button type="button" class="btn icon ghost" :class="{ danger: confirming === trip.id }" :aria-label="confirming === trip.id ? 'Confirmar eliminación' : 'Eliminar viaje'" @click="removeOne(trip)">
               <Trash2 :size="18" />
             </button>
           </li>
@@ -356,14 +378,25 @@ async function saveMeta() {
 <style scoped>
 .day-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
 @media (min-width: 1000px) { .day-grid { grid-template-columns: minmax(380px, 5fr) minmax(0, 6fr); gap: 20px; } }
-@media (min-width: 1400px) { .day-grid { grid-template-columns: minmax(340px, 4fr) minmax(0, 4fr) minmax(300px, 3fr); } }
+@media (min-width: 1400px) { .day-grid { grid-template-columns: minmax(340px, 4fr) minmax(0, 4fr) minmax(380px, 4fr); } }
 .rel { position: relative; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .method { margin-top: 24px; }
+.check { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
 .small-btn { padding: 6px 10px; font-size: 13px; }
 .err { color: var(--neg); font-size: 12px; font-weight: 600; }
 .input[aria-invalid='true'] { border-color: var(--neg); }
 .trip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+/* La lista hace scroll dentro de su tarjeta; en 3 columnas la tarjeta queda fija arriba y acotada al alto de la ventana. */
+.trips-card { display: flex; flex-direction: column; max-height: 70vh; }
+.trip-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+@media (min-width: 1400px) {
+  .trips-col { align-self: stretch; }
+  .trips-card { position: sticky; top: 24px; max-height: calc(100vh - 48px); }
+}
+.trip .row.between > b:first-child { min-width: 0; }
+.trip .num, .trip .dur { white-space: nowrap; }
 .trip { display: flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: 14px; padding: 10px 8px 10px 14px; border: 1px solid transparent; transition: border-color 0.2s; }
 .trip.active { border-color: var(--accent); }
 .hero {

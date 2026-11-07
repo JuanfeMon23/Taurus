@@ -13,74 +13,74 @@ export const SHEETS = [
   { title: 'Movimientos', headers: ['id', 'fecha', 'tipo', 'monto', 'nota', 'actualizado', 'borrado'] },
 ] as const
 
-const v = (x: unknown): Cell => (x === undefined || x === null ? '' : (x as Cell))
-const del = (d?: boolean): Cell => (d ? 1 : '')
+const cellOrEmpty = (value: unknown): Cell => (value === undefined || value === null ? '' : (value as Cell))
+const deletedFlag = (isDeleted?: boolean): Cell => (isDeleted ? 1 : '')
 
-export function toSheets(s: Snapshot): Record<string, SheetRows> {
-  const out: Record<string, SheetRows> = Object.fromEntries(SHEETS.map(x => [x.title, [[...x.headers]]]))
+export function toSheets(snapshot: Snapshot): Record<string, SheetRows> {
+  const out: Record<string, SheetRows> = Object.fromEntries(SHEETS.map(sheet => [sheet.title, [[...sheet.headers]]]))
 
-  for (const c of s.categories) {
-    out.Categorias!.push([c.id, c.name, c.rateMode, v(c.ratePerKm), v(c.totalCost), v(c.intervalKm), c.active ? 1 : 0, c.updatedAt, del(c.deleted)])
+  for (const category of snapshot.categories) {
+    out.Categorias!.push([category.id, category.name, category.rateMode, cellOrEmpty(category.ratePerKm), cellOrEmpty(category.totalCost), cellOrEmpty(category.intervalKm), category.active ? 1 : 0, category.updatedAt, deletedFlag(category.deleted)])
   }
-  for (const d of s.days) {
+  for (const day of snapshot.days) {
     // bruto/costos/neto son informativos para quien abre la hoja; al importar se recalculan.
-    const gross = s.services.filter(x => x.date === d.date && !x.deleted).reduce((t, x) => t + x.amount, 0)
-    const cost = d.costs.reduce((t, c) => t + c.amount, 0)
-    out.Dias!.push([d.id, d.km, v(d.note), gross, cost, gross - cost, JSON.stringify(d.costs), d.updatedAt, del(d.deleted)])
+    const gross = snapshot.services.filter(service => service.date === day.date && !service.deleted).reduce((sum, service) => sum + service.amount, 0)
+    const cost = day.costs.reduce((sum, costLine) => sum + costLine.amount, 0)
+    out.Dias!.push([day.id, day.km, cellOrEmpty(day.note), gross, cost, gross - cost, JSON.stringify(day.costs), day.updatedAt, deletedFlag(day.deleted)])
   }
-  for (const x of s.services) out.Servicios!.push([x.id, x.date, x.amount, x.method, v(x.note), x.updatedAt, del(x.deleted)])
-  for (const c of s.cash) out.Caja!.push([c.id, c.opening, c.openedAt, v(c.closedAt), v(c.counted), c.updatedAt, del(c.deleted)])
-  for (const m of s.movements) out.Movimientos!.push([m.id, m.date, m.type, m.amount, v(m.note), m.updatedAt, del(m.deleted)])
+  for (const service of snapshot.services) out.Servicios!.push([service.id, service.date, service.amount, service.method, cellOrEmpty(service.note), service.updatedAt, deletedFlag(service.deleted)])
+  for (const cashDay of snapshot.cash) out.Caja!.push([cashDay.id, cashDay.opening, cashDay.openedAt, cellOrEmpty(cashDay.closedAt), cellOrEmpty(cashDay.counted), cashDay.updatedAt, deletedFlag(cashDay.deleted)])
+  for (const movement of snapshot.movements) out.Movimientos!.push([movement.id, movement.date, movement.type, movement.amount, cellOrEmpty(movement.note), movement.updatedAt, deletedFlag(movement.deleted)])
   return out
 }
 
-const str = (x: unknown) => (x === '' || x == null ? undefined : String(x))
-const num = (x: unknown) => {
-  if (x === '' || x == null) return undefined
-  const n = Number(x)
-  return Number.isFinite(n) ? n : undefined
+const str = (value: unknown) => (value === '' || value == null ? undefined : String(value))
+const num = (value: unknown) => {
+  if (value === '' || value == null) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
-const isDel = (x: unknown) => x === 1 || x === '1' || x === true || x === 'TRUE'
+const isDel = (value: unknown) => value === 1 || value === '1' || value === true || value === 'TRUE'
 
 /** Filas válidas: con id y fecha de edición (lo demás se ignora). */
 function body(rows: SheetRows | undefined, updatedCol: number) {
-  return (rows ?? []).slice(1).filter(r => str(r[0]) && str(r[updatedCol]))
+  return (rows ?? []).slice(1).filter(row => str(row[0]) && str(row[updatedCol]))
 }
-function meta(r: Cell[], updatedCol: number) {
-  const m: { id: string; updatedAt: string; deleted?: boolean } = { id: String(r[0]), updatedAt: String(r[updatedCol]) }
-  if (isDel(r[updatedCol + 1])) m.deleted = true
-  return m
+function meta(row: Cell[], updatedCol: number) {
+  const result: { id: string; updatedAt: string; deleted?: boolean } = { id: String(row[0]), updatedAt: String(row[updatedCol]) }
+  if (isDel(row[updatedCol + 1])) result.deleted = true
+  return result
 }
-function parseCosts(x: unknown): CostLine[] {
+function parseCosts(rawCosts: unknown): CostLine[] {
   try {
-    const arr = JSON.parse(String(x || '[]'))
-    return Array.isArray(arr) ? arr : []
+    const parsed = JSON.parse(String(rawCosts || '[]'))
+    return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }
 }
 
 export function fromSheets(sheets: Record<string, SheetRows>): Snapshot {
-  const s = emptySnapshot()
-  for (const r of body(sheets.Categorias, 7)) {
-    s.categories.push({
-      ...meta(r, 7), name: String(r[1] ?? ''), rateMode: r[2] === 'derived' ? 'derived' : 'direct',
-      ratePerKm: num(r[3]), totalCost: num(r[4]), intervalKm: num(r[5]), active: num(r[6]) === 1 || r[6] === true,
+  const snapshot = emptySnapshot()
+  for (const row of body(sheets.Categorias, 7)) {
+    snapshot.categories.push({
+      ...meta(row, 7), name: String(row[1] ?? ''), rateMode: row[2] === 'derived' ? 'derived' : 'direct',
+      ratePerKm: num(row[3]), totalCost: num(row[4]), intervalKm: num(row[5]), active: num(row[6]) === 1 || row[6] === true,
     })
   }
-  for (const r of body(sheets.Dias, 7)) {
-    s.days.push({ ...meta(r, 7), date: String(r[0]), km: num(r[1]) ?? 0, note: str(r[2]), costs: parseCosts(r[6]) })
+  for (const row of body(sheets.Dias, 7)) {
+    snapshot.days.push({ ...meta(row, 7), date: String(row[0]), km: num(row[1]) ?? 0, note: str(row[2]), costs: parseCosts(row[6]) })
   }
-  for (const r of body(sheets.Servicios, 5)) {
-    s.services.push({
-      ...meta(r, 5), date: String(r[1]), amount: num(r[2]) ?? 0, method: r[3] === 'transfer' ? 'transfer' : 'cash', note: str(r[4]),
+  for (const row of body(sheets.Servicios, 5)) {
+    snapshot.services.push({
+      ...meta(row, 5), date: String(row[1]), amount: num(row[2]) ?? 0, method: row[3] === 'transfer' ? 'transfer' : 'cash', note: str(row[4]),
     })
   }
-  for (const r of body(sheets.Caja, 5)) {
-    s.cash.push({ ...meta(r, 5), date: String(r[0]), opening: num(r[1]) ?? 0, openedAt: String(r[2] ?? ''), closedAt: str(r[3]), counted: num(r[4]) })
+  for (const row of body(sheets.Caja, 5)) {
+    snapshot.cash.push({ ...meta(row, 5), date: String(row[0]), opening: num(row[1]) ?? 0, openedAt: String(row[2] ?? ''), closedAt: str(row[3]), counted: num(row[4]) })
   }
-  for (const r of body(sheets.Movimientos, 5)) {
-    s.movements.push({ ...meta(r, 5), date: String(r[1]), type: String(r[2]) as MovementType, amount: num(r[3]) ?? 0, note: str(r[4]) })
+  for (const row of body(sheets.Movimientos, 5)) {
+    snapshot.movements.push({ ...meta(row, 5), date: String(row[1]), type: String(row[2]) as MovementType, amount: num(row[3]) ?? 0, note: str(row[4]) })
   }
-  return s
+  return snapshot
 }

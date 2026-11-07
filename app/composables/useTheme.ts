@@ -4,10 +4,10 @@ const KEY = 'taurus-theme'
 const theme = ref<Theme>('dark')
 let ready = false
 
-function apply(t: Theme) {
-  theme.value = t
-  document.documentElement.dataset.theme = t
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'dark' ? '#0a0c11' : '#f4f6fb')
+function apply(nextTheme: Theme) {
+  theme.value = nextTheme
+  document.documentElement.dataset.theme = nextTheme
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', nextTheme === 'dark' ? '#0a0c11' : '#f4f6fb')
 }
 
 /** Tema claro/oscuro: respeta el guardado, si no el del sistema. */

@@ -11,7 +11,7 @@ export function useToast() {
   function show(text: string, kind: ToastMsg['kind'] = 'ok', ms = 2200) {
     const id = ++seq
     toasts.value.push({ id, text, kind })
-    setTimeout(() => (toasts.value = toasts.value.filter(t => t.id !== id)), ms)
+    setTimeout(() => (toasts.value = toasts.value.filter(toast => toast.id !== id)), ms)
   }
   return { toasts, show }
 }

@@ -25,17 +25,17 @@ MESSAGES = {
 }
 
 
-def _message(err: dict[str, Any]) -> str:
-    template = MESSAGES.get(err["type"])
+def _message(error: dict[str, Any]) -> str:
+    template = MESSAGES.get(error["type"])
     if template:
-        return template.format(**err.get("ctx", {}))
-    msg = str(err["msg"])
-    return msg.removeprefix("Value error, ")
+        return template.format(**error.get("ctx", {}))
+    message_text = str(error["msg"])
+    return message_text.removeprefix("Value error, ")
 
 
-def _detail(err: dict[str, Any]) -> dict[str, str]:
-    loc = [str(p) for p in err["loc"] if p != "body"]
-    return {"campo": ".".join(loc), "mensaje": _message(err)}
+def _detail(error: dict[str, Any]) -> dict[str, str]:
+    location = [str(part) for part in error["loc"] if part != "body"]
+    return {"campo": ".".join(location), "mensaje": _message(error)}
 
 
 async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -44,7 +44,7 @@ async def validation_handler(_: Request, exc: RequestValidationError) -> JSONRes
         content={
             "code": "validation_error",
             "message": "Los datos enviados no son válidos",
-            "details": [_detail(e) for e in exc.errors()],
+            "details": [_detail(error) for error in exc.errors()],
         },
     )
 

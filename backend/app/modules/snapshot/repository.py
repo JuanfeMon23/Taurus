@@ -28,7 +28,11 @@ async def upsert_lww(session: AsyncSession, model: type[Base], rows: list[dict[s
         excluded = stmt.excluded
         stmt = stmt.on_conflict_do_update(
             index_elements=["id"],
-            set_={c.name: excluded[c.name] for c in table.columns if c.name != "id"},
+            set_={
+                column.name: excluded[column.name]
+                for column in table.columns
+                if column.name != "id"
+            },
             where=or_(
                 excluded.updated_at > table.c.updated_at,
                 and_(

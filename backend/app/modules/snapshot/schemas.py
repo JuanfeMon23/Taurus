@@ -4,6 +4,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     BeforeValidator,
@@ -15,6 +16,10 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _none_to_default(default: Any) -> BeforeValidator:
+    return BeforeValidator(lambda value: default if value is None else value)
 
 
 def _parse_hhmm(value: Any) -> Any:
@@ -33,10 +38,23 @@ NonNeg = Annotated[
 Positive = Annotated[
     Decimal, Field(gt=0), PlainSerializer(float, return_type=float, when_used="json")
 ]
+
+
+def _check_rate(value: Decimal) -> Decimal:
+    if not 0 <= value <= 1:
+        raise ValueError("La tasa debe estar entre 0 y 1")
+    return value
+
+
+Rate = Annotated[
+    Decimal,
+    AfterValidator(_check_rate),
+    PlainSerializer(float, return_type=float, when_used="json"),
+]
 Hhmm = Annotated[
     time,
     BeforeValidator(_parse_hhmm),
-    PlainSerializer(lambda t: t.strftime("%H:%M"), return_type=str, when_used="json"),
+    PlainSerializer(lambda value: value.strftime("%H:%M"), return_type=str, when_used="json"),
 ]
 
 
@@ -89,6 +107,17 @@ class CashRec(DateIdRecord):
     opened_at: AwareDatetime
     closed_at: AwareDatetime | None = None
     counted: NonNeg | None = None
+    to_deposit: NonNeg | None = None
+
+    @model_validator(mode="after")
+    def _deposito_no_supera_lo_contado(self) -> Self:
+        if (
+            self.counted is not None
+            and self.to_deposit is not None
+            and self.to_deposit > self.counted
+        ):
+            raise ValueError("Lo que va al depósito no puede superar lo contado")
+        return self
 
 
 class MovementRec(SyncRecord):
@@ -98,11 +127,25 @@ class MovementRec(SyncRecord):
     note: str | None = None
 
 
+class DepositMovementRec(SyncRecord):
+    date: date
+    amount: NonNeg
+    note: str | None = None
+
+
+class SettingRec(SyncRecord):
+    commission_rate: Rate
+    vat_rate: Rate
+
+
 class ServiceRec(SyncRecord):
     date: date
     amount: NonNeg
     method: Literal["cash", "transfer"]
-    bonus: Annotated[NonNeg, BeforeValidator(lambda v: 0 if v is None else v)] = Decimal(0)
+    bonus: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
+    is_indrive: Annotated[bool, _none_to_default(True)] = True
+    commission: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
+    commission_vat: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
     note: str | None = None
     start_time: Hhmm | None = None
     end_time: Hhmm | None = None
@@ -114,11 +157,11 @@ class ServiceRec(SyncRecord):
     def _viaje_completo(self) -> Self:
         trip = (self.start_time, self.end_time, self.distance_km)
         extra = (self.origin, self.destination)
-        if any(v is not None for v in trip) and any(v is None for v in trip):
+        if any(field is not None for field in trip) and any(field is None for field in trip):
             raise ValueError(
                 "Los datos de viaje van juntos: deben venir startTime, endTime y distanceKm"
             )
-        if all(v is None for v in trip) and any(v for v in extra):
+        if all(field is None for field in trip) and any(field for field in extra):
             raise ValueError(
                 "Origen y destino requieren los datos de viaje: startTime, endTime y distanceKm"
             )
@@ -133,6 +176,8 @@ class SnapshotWrite(CamelModel):
     services: list[ServiceRec] = []
     cash: list[CashRec] = []
     movements: list[MovementRec] = []
+    deposit_movements: list[DepositMovementRec] = []
+    settings: list[SettingRec] = []
 
 
 class SnapshotRead(SnapshotWrite):

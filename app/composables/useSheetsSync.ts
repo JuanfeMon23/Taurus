@@ -56,12 +56,12 @@ export function useSheetsSync() {
       state.status = 'syncing'
       state.error = ''
       try {
-        const r = await (await ensure()).sync(interactive)
-        Object.assign(state, { connected: true, lastSync: new Date().toISOString(), lastPulled: r.pulled, status: 'ok' })
+        const result = await (await ensure()).sync(interactive)
+        Object.assign(state, { connected: true, lastSync: new Date().toISOString(), lastPulled: result.pulled, status: 'ok' })
         persist()
-      } catch (e) {
+      } catch (error) {
         state.status = navigator.onLine ? 'error' : 'pending'
-        state.error = e instanceof Error ? e.message : String(e)
+        state.error = error instanceof Error ? error.message : String(error)
       } finally {
         running = null
         if (again) {

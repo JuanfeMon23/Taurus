@@ -39,9 +39,9 @@ describe('validateTrip', () => {
     expect(validateTrip({ ...ok, distanceKm: 0 })).toEqual({})
   })
   it('marca cada obligatorio faltante con mensaje legible', () => {
-    const e = validateTrip({})
-    expect(Object.keys(e).sort()).toEqual(['amount', 'distanceKm', 'endTime', 'startTime'])
-    expect(e.startTime).toBe('Falta la hora de recogida')
+    const errors = validateTrip({})
+    expect(Object.keys(errors).sort()).toEqual(['amount', 'distanceKm', 'endTime', 'startTime'])
+    expect(errors.startTime).toBe('Falta la hora de recogida')
   })
   it('rechaza distancia negativa y monto no positivo', () => {
     expect(validateTrip({ ...ok, distanceKm: -1 }).distanceKm).toMatch(/negativa/)

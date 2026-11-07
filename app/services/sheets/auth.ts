@@ -20,7 +20,7 @@ async function nativeLogin(clientId: string, interactive: boolean): Promise<stri
   const { SocialLogin } = await import('@capgo/capacitor-social-login')
   nativeInit ??= SocialLogin.initialize({ google: { webClientId: clientId } })
   await nativeInit
-  const res = await SocialLogin.login({
+  const response = await SocialLogin.login({
     provider: 'google',
     options: {
       scopes: [SCOPE],
@@ -29,7 +29,7 @@ async function nativeLogin(clientId: string, interactive: boolean): Promise<stri
       autoSelectEnabled: !interactive,
     },
   })
-  const token = (res.result as { accessToken?: { token?: string } | null }).accessToken?.token
+  const token = (response.result as { accessToken?: { token?: string } | null }).accessToken?.token
   if (!token) throw new Error('Google no entregó permiso de acceso a la hoja')
   // Credential Manager no informa la expiración; los tokens de Google duran 1 h.
   nativeToken = { value: token, expiresAt: Date.now() + 55 * 60_000 }

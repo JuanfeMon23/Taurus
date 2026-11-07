@@ -5,15 +5,15 @@ import { aggregate, summarize, type Granularity } from '../utils/stats'
 import { money } from '../utils/format'
 
 const days = ref<DayRecord[]>([])
-const catOrder = ref<string[]>([])
-const g = ref<Granularity>('day')
+const categoryOrder = ref<string[]>([])
+const granularity = ref<Granularity>('day')
 const table = ref(false)
 const selected = ref<string | null>(null)
 
 async function load() {
-  const t = await useTaurus()
-  days.value = await t.repo.listDays()
-  catOrder.value = (await t.repo.listCategories()).map(c => c.id)
+  const taurus = await useTaurus()
+  days.value = await taurus.repo.listDays()
+  categoryOrder.value = (await taurus.repo.listCategories()).map(category => category.id)
 }
 onMounted(load)
 onActivated(load)
@@ -21,77 +21,79 @@ onActivated(load)
 const MODES = [['day', 'Día'], ['month', 'Mes'], ['year', 'Año']] as const
 const LIMIT: Record<Granularity, number> = { day: 14, month: 12, year: 10 }
 const KEYLEN: Record<Granularity, number> = { day: 10, month: 7, year: 4 }
-const buckets = computed(() => aggregate(days.value, g.value).slice(-LIMIT[g.value]))
-const sum = computed(() => {
-  const keys = new Set(buckets.value.map(b => b.key))
-  return summarize(days.value.filter(d => keys.has(d.date.slice(0, KEYLEN[g.value]))))
+const buckets = computed(() => aggregate(days.value, granularity.value).slice(-LIMIT[granularity.value]))
+const periodSummary = computed(() => {
+  const keys = new Set(buckets.value.map(bucket => bucket.key))
+  return summarize(days.value.filter(day => keys.has(day.date.slice(0, KEYLEN[granularity.value]))))
 })
 
 // Color por entidad: Neto = serie 1; cada categoría conserva su serie según su id.
-const slot = (id: string) => Math.min(2 + Math.max(catOrder.value.indexOf(id), 0), 8)
-interface Seg { label: string; value: number; color: string }
-const segs = (b: (typeof buckets.value)[number]): Seg[] => [
-  { label: 'Neto', value: Math.max(b.net, 0), color: 'var(--s1)' },
-  ...[...b.costs.entries()]
-    .sort((a, c) => slot(a[0]) - slot(c[0]))
-    .map(([id, c]) => ({ label: c.name, value: c.amount, color: `var(--s${slot(id)})` })),
+const slot = (id: string) => Math.min(2 + Math.max(categoryOrder.value.indexOf(id), 0), 8)
+interface BarSegment { label: string; value: number; color: string }
+const barSegments = (bucket: (typeof buckets.value)[number]): BarSegment[] => [
+  { label: 'Neto', value: Math.max(bucket.net, 0), color: 'var(--s1)' },
+  { label: 'Comisión inDrive', value: bucket.commission, color: 'var(--neg)' },
+  ...[...bucket.costs.entries()]
+    .sort((first, second) => slot(first[0]) - slot(second[0]))
+    .map(([id, cost]) => ({ label: cost.name, value: cost.amount, color: `var(--s${slot(id)})` })),
 ]
 
 const legend = computed(() => {
   const seen = new Map<string, string>([['Neto', 'var(--s1)']])
-  for (const b of buckets.value) for (const [id, c] of b.costs) seen.set(c.name, `var(--s${slot(id)})`)
+  if (buckets.value.some(bucket => bucket.commission > 0)) seen.set('Comisión inDrive', 'var(--neg)')
+  for (const bucket of buckets.value) for (const [id, cost] of bucket.costs) seen.set(cost.name, `var(--s${slot(id)})`)
   return [...seen.entries()]
 })
 
 // Geometría
-const W = 340, H = 210, L = 40, T = 14, B = 28
-const plotW = W - L - 8, plotH = H - T - B
-const maxVal = computed(() => {
-  const m = Math.max(0, ...buckets.value.map(b => segs(b).reduce((s, x) => s + x.value, 0)))
-  if (m === 0) return 1
-  const p = 10 ** Math.floor(Math.log10(m))
-  return Math.ceil(m / p / 2) * p * 2
+const CHART_WIDTH = 340, CHART_HEIGHT = 210, PAD_LEFT = 40, PAD_TOP = 14, PAD_BOTTOM = 28
+const plotWidth = CHART_WIDTH - PAD_LEFT - 8, plotHeight = CHART_HEIGHT - PAD_TOP - PAD_BOTTOM
+const maxValue = computed(() => {
+  const largest = Math.max(0, ...buckets.value.map(bucket => barSegments(bucket).reduce((total, segment) => total + segment.value, 0)))
+  if (largest === 0) return 1
+  const magnitude = 10 ** Math.floor(Math.log10(largest))
+  return Math.ceil(largest / magnitude / 2) * magnitude * 2
 })
-const ticks = computed(() => [0, 0.5, 1].map(f => f * maxVal.value))
-const y = (v: number) => T + plotH - (v / maxVal.value) * plotH
-const slotW = computed(() => plotW / Math.max(buckets.value.length, 1))
-const barW = computed(() => Math.min(24, slotW.value * 0.7))
+const ticks = computed(() => [0, 0.5, 1].map(fraction => fraction * maxValue.value))
+const scaleY = (value: number) => PAD_TOP + plotHeight - (value / maxValue.value) * plotHeight
+const slotWidth = computed(() => plotWidth / Math.max(buckets.value.length, 1))
+const barWidth = computed(() => Math.min(24, slotWidth.value * 0.7))
 
-function compact(n: number) {
-  if (n >= 1e6) return `${+(n / 1e6).toFixed(1)}M`
-  if (n >= 1e3) return `${+(n / 1e3).toFixed(1)}K`
-  return String(Math.round(n))
+function formatCompact(amount: number) {
+  if (amount >= 1e6) return `${+(amount / 1e6).toFixed(1)}M`
+  if (amount >= 1e3) return `${+(amount / 1e3).toFixed(1)}K`
+  return String(Math.round(amount))
 }
-const label = (key: string) => (g.value === 'day' ? key.slice(8) : g.value === 'month' ? key.slice(5) : key)
+const label = (key: string) => (granularity.value === 'day' ? key.slice(8) : granularity.value === 'month' ? key.slice(5) : key)
 
 /** Rect con esquinas superiores redondeadas (4px) y base recta. */
-function seg(x: number, top: number, h: number, w: number, round: boolean) {
-  const r = round ? Math.min(4, h, w / 2) : 0
-  return `M${x},${top + h}V${top + r}Q${x},${top} ${x + r},${top}H${x + w - r}Q${x + w},${top} ${x + w},${top + r}V${top + h}Z`
+function buildBarPath(left: number, top: number, height: number, width: number, round: boolean) {
+  const radius = round ? Math.min(4, height, width / 2) : 0
+  return `M${left},${top + height}V${top + radius}Q${left},${top} ${left + radius},${top}H${left + width - radius}Q${left + width},${top} ${left + width},${top + radius}V${top + height}Z`
 }
 
-function rects(b: (typeof buckets.value)[number], i: number) {
-  const x = L + i * slotW.value + (slotW.value - barW.value) / 2
-  let acc = 0
-  const items = segs(b).filter(s => s.value > 0)
-  return items.map((s, k) => {
-    const top = y(acc + s.value)
-    const h = y(acc) - top
-    acc += s.value
-    return { d: seg(x, top, Math.max(h - 2, 1), barW.value, k === items.length - 1), color: s.color }
+function buildRects(bucket: (typeof buckets.value)[number], bucketIndex: number) {
+  const left = PAD_LEFT + bucketIndex * slotWidth.value + (slotWidth.value - barWidth.value) / 2
+  let accumulated = 0
+  const items = barSegments(bucket).filter(segment => segment.value > 0)
+  return items.map((segment, segmentIndex) => {
+    const top = scaleY(accumulated + segment.value)
+    const height = scaleY(accumulated) - top
+    accumulated += segment.value
+    return { path: buildBarPath(left, top, Math.max(height - 2, 1), barWidth.value, segmentIndex === items.length - 1), color: segment.color }
   })
 }
 
-const sel = computed(() => buckets.value.find(b => b.key === selected.value) ?? null)
+const selectedBucket = computed(() => buckets.value.find(bucket => bucket.key === selected.value) ?? null)
 // Cambiar de rango reinicia la animación de crecimiento de las barras.
-const chartKey = computed(() => `${g.value}-${buckets.value.length}`)
+const chartKey = computed(() => `${granularity.value}-${buckets.value.length}`)
 </script>
 
 <template>
   <section class="stack">
-    <div class="seg" :style="{ '--n': 3, '--i': MODES.findIndex(m => m[0] === g) }">
+    <div class="seg" :style="{ '--n': 3, '--i': MODES.findIndex(mode => mode[0] === granularity) }">
       <span class="thumb" />
-      <button v-for="[k, l] in MODES" :key="k" :class="{ active: g === k }" @click="g = k; selected = null">{{ l }}</button>
+      <button v-for="[modeKey, modeLabel] in MODES" :key="modeKey" :class="{ active: granularity === modeKey }" @click="granularity = modeKey; selected = null">{{ modeLabel }}</button>
     </div>
 
     <div v-if="!days.length" class="card empty">
@@ -105,32 +107,36 @@ const chartKey = computed(() => `${g.value}-${buckets.value.length}`)
       <div class="bento rise">
         <div class="card hero">
           <span class="title"><TrendingUp :size="14" /> Neto</span>
-          <p class="hero-value" :class="sum.net >= 0 ? 'pos' : 'neg'"><AnimatedNumber :value="sum.net" /></p>
-          <p class="muted small">{{ sum.days }} {{ sum.days === 1 ? 'día' : 'días' }} en el período</p>
+          <p class="hero-value" :class="periodSummary.net >= 0 ? 'pos' : 'neg'"><AnimatedNumber :value="periodSummary.net" /></p>
+          <p class="muted small">{{ periodSummary.days }} {{ periodSummary.days === 1 ? 'día' : 'días' }} en el período</p>
         </div>
         <div class="card tile">
           <span class="icon-tile info"><Wallet :size="18" /></span>
-          <span class="muted small">Bruto</span><b class="num">{{ money(sum.gross) }}</b>
+          <span class="muted small">Bruto</span><b class="num">{{ money(periodSummary.gross) }}</b>
         </div>
         <div class="card tile">
           <span class="icon-tile neg"><CircleDollarSign :size="18" /></span>
-          <span class="muted small">Costos</span><b class="num">{{ money(sum.totalCost) }}</b>
+          <span class="muted small">Costos</span><b class="num">{{ money(periodSummary.totalCost) }}</b>
+        </div>
+        <div class="card tile">
+          <span class="icon-tile neg"><CircleDollarSign :size="18" /></span>
+          <span class="muted small">Comisión inDrive + IVA</span><b class="num">{{ money(periodSummary.commission) }}</b>
         </div>
         <div class="card tile">
           <span class="icon-tile pos"><Gauge :size="18" /></span>
-          <span class="muted small">Neto por día</span><b class="num">{{ money(sum.avgNet) }}</b>
+          <span class="muted small">Neto por día</span><b class="num">{{ money(periodSummary.avgNet) }}</b>
         </div>
         <div class="card tile">
           <span class="icon-tile"><Route :size="18" /></span>
-          <span class="muted small">{{ Math.round(sum.km) }} km · neto/km</span><b class="num">{{ money(sum.netPerKm) }}</b>
+          <span class="muted small">{{ Math.round(periodSummary.km) }} km · neto/km</span><b class="num">{{ money(periodSummary.netPerKm) }}</b>
         </div>
         <div class="card tile wide">
           <span class="icon-tile"><Trophy :size="18" /></span>
           <div>
             <span class="muted small">Mejor día</span>
-            <b class="num block">{{ sum.best ? money(sum.best.net) : '—' }}</b>
+            <b class="num block">{{ periodSummary.best ? money(periodSummary.best.net) : '—' }}</b>
           </div>
-          <span v-if="sum.best" class="muted small best-date">{{ sum.best.date }}</span>
+          <span v-if="periodSummary.best" class="muted small best-date">{{ periodSummary.best.date }}</span>
         </div>
       </div>
 
@@ -146,36 +152,36 @@ const chartKey = computed(() => `${g.value}-${buckets.value.length}`)
           <span v-for="[name, color] in legend" :key="name"><i :style="{ background: color }" />{{ name }}</span>
         </div>
 
-        <svg v-if="!table" :key="chartKey" :viewBox="`0 0 ${W} ${H}`" role="img" aria-label="Ingreso bruto por período, dividido en neto y costos">
-          <g v-for="t in ticks" :key="t">
-            <line :x1="L" :x2="W - 8" :y1="y(t)" :y2="y(t)" class="grid" />
-            <text :x="L - 6" :y="y(t) + 4" class="tick" text-anchor="end">{{ compact(t) }}</text>
+        <svg v-if="!table" :key="chartKey" :viewBox="`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`" role="img" aria-label="Ingreso bruto por período, dividido en neto y costos">
+          <g v-for="tick in ticks" :key="tick">
+            <line :x1="PAD_LEFT" :x2="CHART_WIDTH - 8" :y1="scaleY(tick)" :y2="scaleY(tick)" class="grid" />
+            <text :x="PAD_LEFT - 6" :y="scaleY(tick) + 4" class="tick" text-anchor="end">{{ formatCompact(tick) }}</text>
           </g>
-          <g v-for="(b, i) in buckets" :key="b.key" class="col" @click="selected = selected === b.key ? null : b.key">
-            <rect :x="L + i * slotW" :y="T" :width="slotW" :height="plotH" fill="transparent" />
-            <g class="bar" :style="{ animationDelay: i * 35 + 'ms', opacity: selected && selected !== b.key ? 0.35 : 1 }">
-              <path v-for="(r, k) in rects(b, i)" :key="k" :d="r.d" :fill="r.color" />
+          <g v-for="(bucket, i) in buckets" :key="bucket.key" class="col" @click="selected = selected === bucket.key ? null : bucket.key">
+            <rect :x="PAD_LEFT + i * slotWidth" :y="PAD_TOP" :width="slotWidth" :height="plotHeight" fill="transparent" />
+            <g class="bar" :style="{ animationDelay: i * 35 + 'ms', opacity: selected && selected !== bucket.key ? 0.35 : 1 }">
+              <path v-for="(rect, rectIndex) in buildRects(bucket, i)" :key="rectIndex" :d="rect.path" :fill="rect.color" />
             </g>
-            <text :x="L + i * slotW + slotW / 2" :y="H - 10" class="tick" :class="{ sel: selected === b.key }" text-anchor="middle">{{ label(b.key) }}</text>
+            <text :x="PAD_LEFT + i * slotWidth + slotWidth / 2" :y="CHART_HEIGHT - 10" class="tick" :class="{ sel: selected === bucket.key }" text-anchor="middle">{{ label(bucket.key) }}</text>
           </g>
         </svg>
 
         <div v-else class="table-wrap">
           <table>
-            <thead><tr><th>Período</th><th>Bruto</th><th>Costos</th><th>Neto</th><th>Km</th></tr></thead>
+            <thead><tr><th>Período</th><th>Bruto</th><th>Costos</th><th>Comisión</th><th>Neto</th><th>Km</th></tr></thead>
             <tbody>
-              <tr v-for="b in buckets" :key="b.key">
-                <td>{{ b.key }}</td><td>{{ money(b.gross) }}</td><td>{{ money(b.totalCost) }}</td><td>{{ money(b.net) }}</td><td>{{ Math.round(b.km) }}</td>
+              <tr v-for="bucket in buckets" :key="bucket.key">
+                <td>{{ bucket.key }}</td><td>{{ money(bucket.gross) }}</td><td>{{ money(bucket.totalCost) }}</td><td>{{ money(bucket.commission) }}</td><td>{{ money(bucket.net) }}</td><td>{{ Math.round(bucket.km) }}</td>
               </tr>
             </tbody>
           </table>
         </div>
 
         <Transition name="page">
-          <div v-if="sel && !table" class="tip">
-            <b>{{ sel.key }}</b>
-            <div v-for="s in segs(sel)" :key="s.label"><span><i :style="{ background: s.color }" />{{ s.label }}</span><b class="num">{{ money(s.value) }}</b></div>
-            <div class="total"><span>Bruto</span><b class="num">{{ money(sel.gross) }}</b></div>
+          <div v-if="selectedBucket && !table" class="tip">
+            <b>{{ selectedBucket.key }}</b>
+            <div v-for="segment in barSegments(selectedBucket)" :key="segment.label"><span><i :style="{ background: segment.color }" />{{ segment.label }}</span><b class="num">{{ money(segment.value) }}</b></div>
+            <div class="total"><span>Bruto</span><b class="num">{{ money(selectedBucket.gross) }}</b></div>
           </div>
           <p v-else-if="!table" class="muted small">Toca una barra para ver el detalle.</p>
         </Transition>

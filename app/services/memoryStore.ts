@@ -10,12 +10,12 @@ const KEY = 'taurus-state'
 
 /** Inserta o reemplaza por id. */
 export function upsert(target: Snapshot, changes: Partial<Snapshot>) {
-  for (const col of Object.keys(changes) as Collection[]) {
-    const list = target[col] as Meta[]
-    for (const rec of (changes[col] ?? []) as Meta[]) {
-      const i = list.findIndex(r => r.id === rec.id)
-      if (i >= 0) list[i] = rec
-      else list.push(rec)
+  for (const collection of Object.keys(changes) as Collection[]) {
+    const list = target[collection] as Meta[]
+    for (const record of (changes[collection] ?? []) as Meta[]) {
+      const index = list.findIndex(existing => existing.id === record.id)
+      if (index >= 0) list[index] = record
+      else list.push(record)
     }
   }
 }

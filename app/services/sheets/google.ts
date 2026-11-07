@@ -4,22 +4,22 @@ export const SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const GIS_URL = 'https://accounts.google.com/gsi/client'
 
 interface TokenResponse { access_token?: string; expires_in?: number; error?: string; error_description?: string }
-interface TokenClient { requestAccessToken(o?: { prompt?: string }): void }
+interface TokenClient { requestAccessToken(options?: { prompt?: string }): void }
 
 let gis: Promise<void> | null = null
 let client: TokenClient | null = null
-let pending: { resolve(t: string): void; reject(e: Error): void } | null = null
+let pending: { resolve(accessToken: string): void; reject(error: Error): void } | null = null
 let token: { value: string; expiresAt: number } | null = null
 
 function loadGis(): Promise<void> {
   gis ??= new Promise((resolve, reject) => {
     if ((window as any).google?.accounts?.oauth2) return resolve()
-    const s = document.createElement('script')
-    s.src = GIS_URL
-    s.async = true
-    s.onload = () => resolve()
-    s.onerror = () => { gis = null; reject(new Error('No se pudo cargar Google (¿sin internet?)')) }
-    document.head.appendChild(s)
+    const script = document.createElement('script')
+    script.src = GIS_URL
+    script.async = true
+    script.onload = () => resolve()
+    script.onerror = () => { gis = null; reject(new Error('No se pudo cargar Google (¿sin internet?)')) }
+    document.head.appendChild(script)
   })
   return gis
 }
@@ -31,17 +31,17 @@ export async function getAccessToken(clientId: string, interactive: boolean): Pr
   client ??= (window as any).google.accounts.oauth2.initTokenClient({
     client_id: clientId,
     scope: SCOPE,
-    callback: (r: TokenResponse) => {
-      if (r.access_token) {
-        token = { value: r.access_token, expiresAt: Date.now() + (r.expires_in ?? 3600) * 1000 }
-        pending?.resolve(r.access_token)
+    callback: (response: TokenResponse) => {
+      if (response.access_token) {
+        token = { value: response.access_token, expiresAt: Date.now() + (response.expires_in ?? 3600) * 1000 }
+        pending?.resolve(response.access_token)
       } else {
-        pending?.reject(new Error(r.error_description || r.error || 'Autorización rechazada'))
+        pending?.reject(new Error(response.error_description || response.error || 'Autorización rechazada'))
       }
       pending = null
     },
-    error_callback: (e: { type?: string; message?: string }) => {
-      pending?.reject(new Error(e.message || e.type || 'Autorización cancelada'))
+    error_callback: (error: { type?: string; message?: string }) => {
+      pending?.reject(new Error(error.message || error.type || 'Autorización cancelada'))
       pending = null
     },
   }) as TokenClient
@@ -52,7 +52,7 @@ export async function getAccessToken(clientId: string, interactive: boolean): Pr
 }
 
 export function revokeToken() {
-  const g = (window as any).google
-  if (token && g?.accounts?.oauth2) g.accounts.oauth2.revoke(token.value, () => {})
+  const googleApi = (window as any).google
+  if (token && googleApi?.accounts?.oauth2) googleApi.accounts.oauth2.revoke(token.value, () => {})
   token = null
 }

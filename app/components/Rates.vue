@@ -2,6 +2,7 @@
 import { Plus, Tag } from 'lucide-vue-next'
 import type { Category } from '../utils/calc'
 import { categoryRate } from '../utils/calc'
+import { percentToRate, ratesToPercent, validateRates, type RatesFormErrors } from '../utils/commission'
 import { rate } from '../utils/format'
 import { categoryIcon } from '../utils/icons'
 
@@ -13,22 +14,41 @@ const draft = reactive({
   totalCost: null as number | null,
   intervalKm: null as number | null,
 })
+const commissionForm = reactive({ commissionPercent: null as number | null, vatPercent: null as number | null })
+const commissionErrors = ref<RatesFormErrors>({})
 const { show } = useToast()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
 async function load() {
   categories.value = await taurus.repo.listCategories()
+  const rates = await taurus.repo.getRates()
+  commissionForm.commissionPercent = ratesToPercent(rates.commissionRate)
+  commissionForm.vatPercent = ratesToPercent(rates.vatRate)
+}
+
+async function saveCommission() {
+  commissionErrors.value = validateRates(commissionForm)
+  if (Object.keys(commissionErrors.value).length) {
+    show('Revisa los porcentajes', 'error')
+    return
+  }
+  try {
+    await taurus.repo.saveRates({ commissionRate: percentToRate(commissionForm.commissionPercent!), vatRate: percentToRate(commissionForm.vatPercent!) })
+    show('Comisión inDrive guardada')
+  } catch (error) {
+    show(error instanceof Error && error.message ? error.message : 'No se pudo guardar', 'error')
+  }
 }
 onMounted(async () => {
   taurus = await useTaurus()
   await load()
 })
 
-const val = (e: Event) => Number((e.target as HTMLInputElement).value)
-const totalRate = computed(() => categories.value.filter(c => c.active).reduce((s, c) => s + categoryRate(c), 0))
+const readInputNumber = (event: Event) => Number((event.target as HTMLInputElement).value)
+const totalRate = computed(() => categories.value.filter(category => category.active).reduce((total, category) => total + categoryRate(category), 0))
 
-async function save(c: Category) {
-  await taurus.repo.saveCategory(c)
+async function save(category: Category) {
+  await taurus.repo.saveCategory(category)
   await load()
 }
 
@@ -56,30 +76,49 @@ async function add() {
       <p class="muted small">Los cambios aplican a días nuevos; los ya guardados conservan su tarifa.</p>
     </div>
 
-    <div v-for="c in categories" :key="c.id" class="card stack" :class="{ off: !c.active }" style="gap: 12px">
+    <div v-for="category in categories" :key="category.id" class="card stack" :class="{ off: !category.active }" style="gap: 12px">
       <div class="row">
-        <span class="icon-tile"><component :is="categoryIcon(c.name)" :size="20" /></span>
+        <span class="icon-tile"><component :is="categoryIcon(category.name)" :size="20" /></span>
         <div class="grow">
-          <b>{{ c.name }}</b>
-          <p class="muted small num">{{ rate(categoryRate(c)) }}</p>
+          <b>{{ category.name }}</b>
+          <p class="muted small num">{{ rate(categoryRate(category)) }}</p>
         </div>
-        <button class="switch" :class="{ on: c.active }" role="switch" :aria-checked="c.active" :aria-label="`Activar ${c.name}`"
-          @click="save({ ...c, active: !c.active })" />
+        <button class="switch" :class="{ on: category.active }" role="switch" :aria-checked="category.active" :aria-label="`Activar ${category.name}`"
+          @click="save({ ...category, active: !category.active })" />
       </div>
-      <div v-if="c.rateMode === 'direct'" class="field">
+      <div v-if="category.rateMode === 'direct'" class="field">
         <span>Valor por km ($)</span>
-        <input class="input" type="number" inputmode="decimal" :value="c.ratePerKm" @change="save({ ...c, ratePerKm: val($event) })">
+        <input class="input" type="number" inputmode="decimal" :value="category.ratePerKm" @change="save({ ...category, ratePerKm: readInputNumber($event) })">
       </div>
       <div v-else class="grid2">
         <label class="field">
           <span>Costo total ($)</span>
-          <input class="input" type="number" inputmode="decimal" :value="c.totalCost" @change="save({ ...c, totalCost: val($event) })">
+          <input class="input" type="number" inputmode="decimal" :value="category.totalCost" @change="save({ ...category, totalCost: readInputNumber($event) })">
         </label>
         <label class="field">
           <span>Cada (km)</span>
-          <input class="input" type="number" inputmode="decimal" :value="c.intervalKm" @change="save({ ...c, intervalKm: val($event) })">
+          <input class="input" type="number" inputmode="decimal" :value="category.intervalKm" @change="save({ ...category, intervalKm: readInputNumber($event) })">
         </label>
       </div>
+    </div>
+
+    <div class="card stack" style="gap: 12px">
+      <span class="title">Comisión inDrive</span>
+      <div class="grid2">
+        <label class="field">
+          <span>Comisión (%)</span>
+          <input v-model.number="commissionForm.commissionPercent" class="input" type="number" inputmode="decimal" min="0" max="100" step="any"
+            :aria-invalid="!!commissionErrors.commissionPercent" @change="saveCommission">
+          <small v-if="commissionErrors.commissionPercent" class="err" role="alert">{{ commissionErrors.commissionPercent }}</small>
+        </label>
+        <label class="field">
+          <span>IVA sobre la comisión (%)</span>
+          <input v-model.number="commissionForm.vatPercent" class="input" type="number" inputmode="decimal" min="0" max="100" step="any"
+            :aria-invalid="!!commissionErrors.vatPercent" @change="saveCommission">
+          <small v-if="commissionErrors.vatPercent" class="err" role="alert">{{ commissionErrors.vatPercent }}</small>
+        </label>
+      </div>
+      <p class="muted small">Se calcula sobre el dinero del viaje sin bonus. Los cambios aplican a viajes nuevos o editados; los guardados conservan su comisión.</p>
     </div>
 
     <div class="card stack">
@@ -107,5 +146,7 @@ async function add() {
 .total .value { font-size: 36px; font-weight: 800; letter-spacing: -0.02em; color: var(--accent); margin: 4px 0; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .off { opacity: 0.6; }
+.err { color: var(--neg); font-size: 12px; font-weight: 600; }
+.input[aria-invalid='true'] { border-color: var(--neg); }
 .card { transition: opacity 0.3s; }
 </style>

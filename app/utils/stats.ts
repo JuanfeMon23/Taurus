@@ -6,6 +6,8 @@ export interface Bucket {
   key: string
   gross: number
   totalCost: number
+  /** Comisión inDrive + IVA (ya descontados del neto). */
+  commission: number
   net: number
   km: number
   days: number
@@ -15,6 +17,8 @@ export interface Bucket {
 export interface Summary {
   gross: number
   totalCost: number
+  /** Comisión inDrive + IVA (ya descontados del neto). */
+  commission: number
   net: number
   km: number
   days: number
@@ -26,42 +30,43 @@ export interface Summary {
 const LEN = { day: 10, month: 7, year: 4 } as const
 
 /** Trunca YYYY-MM-DD al bucket: día, YYYY-MM o YYYY. */
-export const bucketKey = (date: string, g: Granularity) => date.slice(0, LEN[g])
+export const bucketKey = (date: string, granularity: Granularity) => date.slice(0, LEN[granularity])
 
 /** Agrupa días en buckets cronológicos con totales y costos por categoría. */
-export function aggregate(days: DayRecord[], g: Granularity): Bucket[] {
+export function aggregate(days: DayRecord[], granularity: Granularity): Bucket[] {
   const map = new Map<string, Bucket>()
-  for (const d of days) {
-    const key = bucketKey(d.date, g)
-    let b = map.get(key)
-    if (!b) {
-      b = { key, gross: 0, totalCost: 0, net: 0, km: 0, days: 0, costs: new Map() }
-      map.set(key, b)
+  for (const day of days) {
+    const key = bucketKey(day.date, granularity)
+    let bucket = map.get(key)
+    if (!bucket) {
+      bucket = { key, gross: 0, totalCost: 0, commission: 0, net: 0, km: 0, days: 0, costs: new Map() }
+      map.set(key, bucket)
     }
-    b.gross += d.gross
-    b.totalCost += d.totalCost
-    b.net += d.net
-    b.km += d.km
-    b.days += 1
-    for (const c of d.costs) {
-      const prev = b.costs.get(c.categoryId)
-      b.costs.set(c.categoryId, { name: c.name, amount: (prev?.amount ?? 0) + c.amount })
+    bucket.gross += day.gross
+    bucket.totalCost += day.totalCost
+    bucket.commission += day.commission + day.commissionVat
+    bucket.net += day.net
+    bucket.km += day.km
+    bucket.days += 1
+    for (const cost of day.costs) {
+      const previousCost = bucket.costs.get(cost.categoryId)
+      bucket.costs.set(cost.categoryId, { name: cost.name, amount: (previousCost?.amount ?? 0) + cost.amount })
     }
   }
-  return [...map.values()].sort((a, b) => a.key.localeCompare(b.key))
+  return [...map.values()].sort((first, second) => first.key.localeCompare(second.key))
 }
 
 export function summarize(days: DayRecord[]): Summary {
-  const s = days.reduce(
-    (acc, d) => ({ gross: acc.gross + d.gross, totalCost: acc.totalCost + d.totalCost, net: acc.net + d.net, km: acc.km + d.km }),
-    { gross: 0, totalCost: 0, net: 0, km: 0 },
+  const totals = days.reduce(
+    (acc, day) => ({ gross: acc.gross + day.gross, totalCost: acc.totalCost + day.totalCost, commission: acc.commission + day.commission + day.commissionVat, net: acc.net + day.net, km: acc.km + day.km }),
+    { gross: 0, totalCost: 0, commission: 0, net: 0, km: 0 },
   )
-  const best = days.reduce<DayRecord | null>((m, d) => (!m || d.net > m.net ? d : m), null)
+  const best = days.reduce<DayRecord | null>((bestSoFar, day) => (!bestSoFar || day.net > bestSoFar.net ? day : bestSoFar), null)
   return {
-    ...s,
+    ...totals,
     days: days.length,
-    avgNet: days.length ? s.net / days.length : 0,
-    netPerKm: s.km ? s.net / s.km : 0,
+    avgNet: days.length ? totals.net / days.length : 0,
+    netPerKm: totals.km ? totals.net / totals.km : 0,
     best,
   }
 }

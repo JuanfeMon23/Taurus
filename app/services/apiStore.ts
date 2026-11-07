@@ -8,35 +8,35 @@ export const NETWORK_ERROR = 'No se pudo conectar con el servidor local de Tauru
 export class ApiError extends Error {}
 
 /** Convierte la respuesta de error del backend (422 con `details`, u otra) en un mensaje legible. */
-async function readableError(res: Response): Promise<string> {
+async function readableError(response: Response): Promise<string> {
   let body: any = null
   try {
-    body = await res.json()
+    body = await response.json()
   } catch { /* cuerpo no JSON */ }
-  if (res.status === 422) {
-    const msgs = Array.isArray(body?.details) ? body.details.map((d: any) => d?.mensaje).filter(Boolean) : []
-    if (msgs.length) return msgs.join('. ')
+  if (response.status === 422) {
+    const messages = Array.isArray(body?.details) ? body.details.map((detail: any) => detail?.mensaje).filter(Boolean) : []
+    if (messages.length) return messages.join('. ')
     if (typeof body?.message === 'string') return body.message
     return 'Los datos enviados no son válidos.'
   }
-  if (res.status >= 500) return 'El servidor local de Taurus tuvo un problema; inténtalo de nuevo.'
+  if (response.status >= 500) return 'El servidor local de Taurus tuvo un problema; inténtalo de nuevo.'
   if (typeof body?.message === 'string') return body.message
-  return `No se pudo completar la operación (error ${res.status}).`
+  return `No se pudo completar la operación (error ${response.status}).`
 }
 
 /** Store que guarda en el backend local de Taurus vía GET/PUT /snapshot. */
-export function createApiStore(base: string, fetchFn: Fetch = (i, o) => fetch(i, o)): Store {
+export function createApiStore(base: string, fetchFn: Fetch = (input, init) => fetch(input, init)): Store {
   const url = `${base.replace(/\/+$/, '')}/snapshot`
 
   async function call(init?: RequestInit): Promise<any> {
-    let res: Response
+    let response: Response
     try {
-      res = await fetchFn(url, init)
+      response = await fetchFn(url, init)
     } catch {
       throw new ApiError(NETWORK_ERROR)
     }
-    if (!res.ok) throw new ApiError(await readableError(res))
-    return res.json()
+    if (!response.ok) throw new ApiError(await readableError(response))
+    return response.json()
   }
 
   return {

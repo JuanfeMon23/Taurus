@@ -26,13 +26,13 @@ defineEmits<{ select: [key: string] }>()
 
     <nav aria-label="Secciones" class="items">
       <button
-        v-for="it in items" :key="it.key" type="button" class="item"
-        :class="{ active: it.key === active }" :title="collapsed ? it.label : undefined"
-        :aria-label="it.label" :aria-current="it.key === active ? 'page' : undefined"
-        @click="$emit('select', it.key)"
+        v-for="item in items" :key="item.key" type="button" class="item"
+        :class="{ active: item.key === active }" :title="collapsed ? item.label : undefined"
+        :aria-label="item.label" :aria-current="item.key === active ? 'page' : undefined"
+        @click="$emit('select', item.key)"
       >
-        <component :is="it.icon" :size="20" :stroke-width="it.key === active ? 2.4 : 1.9" />
-        <span v-if="!collapsed">{{ it.label }}</span>
+        <component :is="item.icon" :size="20" :stroke-width="item.key === active ? 2.4 : 1.9" />
+        <span v-if="!collapsed">{{ item.label }}</span>
       </button>
     </nav>
 

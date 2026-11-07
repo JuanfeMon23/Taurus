@@ -15,7 +15,7 @@ export interface SyncDeps {
   setSheetId(id: string | null): void
 }
 
-const count = (s: Partial<Snapshot>) => Object.values(s).reduce((n, xs) => n + (xs?.length ?? 0), 0)
+const count = (snapshot: Partial<Snapshot>) => Object.values(snapshot).reduce((total, records) => total + (records?.length ?? 0), 0)
 
 export function createSync(deps: SyncDeps) {
   /** Hoja a usar: la recordada; si no, la que ya exista en Drive; si no, una nueva. Repara pestañas faltantes. */
@@ -24,7 +24,7 @@ export function createSync(deps: SyncDeps) {
     for (const id of candidates) {
       const tabs = await getTabs(token, id)
       if (!tabs) continue
-      await addTabs(token, id, SHEETS.map(s => s.title).filter(t => !tabs.includes(t)))
+      await addTabs(token, id, SHEETS.map(sheet => sheet.title).filter(title => !tabs.includes(title)))
       if (id !== deps.getSheetId()) deps.setSheetId(id)
       return id
     }

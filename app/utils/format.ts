@@ -1,10 +1,10 @@
-const cop = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 })
-const dec = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 1 })
+const copFormatter = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 })
+const decimalFormatter = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 1 })
 
-export const money = (n: number) => `$ ${cop.format(Math.round(n))}`
-export const rate = (n: number) => `${dec.format(n)} $/km`
+export const money = (amount: number) => `$ ${copFormatter.format(Math.round(amount))}`
+export const rate = (amount: number) => `${decimalFormatter.format(amount)} $/km`
 
-export function todayISO(d = new Date()) {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+export function todayISO(date = new Date()) {
+  const padTwoDigits = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${padTwoDigits(date.getMonth() + 1)}-${padTwoDigits(date.getDate())}`
 }

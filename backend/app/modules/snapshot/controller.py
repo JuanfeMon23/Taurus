@@ -1,12 +1,14 @@
 from typing import Any
 
+from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db.base import Base
-from app.modules.cash.models import CashDay, Movement
+from app.modules.cash.models import CashDay, DepositMovement, Movement
 from app.modules.categories.models import Category
 from app.modules.days.models import Day
 from app.modules.services.models import Service
+from app.modules.settings.models import Setting
 from app.modules.snapshot import repository
 from app.modules.snapshot.schemas import SnapshotRead, SnapshotResult, SnapshotWrite
 
@@ -17,14 +19,16 @@ MODELS: dict[str, type[Base]] = {
     "services": Service,
     "cash": CashDay,
     "movements": Movement,
+    "deposit_movements": DepositMovement,
+    "settings": Setting,
 }
 
 
-def _beats(a: Any, b: Any) -> bool:
-    """True si el registro `a` gana sobre `b` (más nuevo; en empate, la lápida)."""
-    if a.updated_at != b.updated_at:
-        return a.updated_at > b.updated_at
-    return a.deleted and not b.deleted
+def _beats(candidate: Any, incumbent: Any) -> bool:
+    """True si el registro `candidate` gana sobre `incumbent` (más nuevo; en empate, la lápida)."""
+    if candidate.updated_at != incumbent.updated_at:
+        return candidate.updated_at > incumbent.updated_at
+    return candidate.deleted and not incumbent.deleted
 
 
 def _latest_per_id(records: list[Any]) -> list[Any]:
@@ -49,7 +53,8 @@ async def apply_snapshot(session: AsyncSession, snapshot: SnapshotWrite) -> Snap
         incoming = getattr(snapshot, col)
         unique = _latest_per_id(incoming)
         rows = [rec.model_dump() for rec in unique]
-        applied[col] = await repository.upsert_lww(session, model, rows) if rows else 0
-        skipped[col] = len(incoming) - applied[col]
+        key = to_camel(col)
+        applied[key] = await repository.upsert_lww(session, model, rows) if rows else 0
+        skipped[key] = len(incoming) - applied[key]
     await session.commit()
     return SnapshotResult(applied=applied, skipped=skipped)

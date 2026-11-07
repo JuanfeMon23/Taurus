@@ -9,8 +9,8 @@ interface KV {
 export const LEGACY_KEY = 'taurus-state'
 export const IMPORTED_KEY = 'taurus-api-imported'
 
-const COLLECTIONS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements']
-const isEmpty = (s: Snapshot) => COLLECTIONS.every(c => !s[c]?.length)
+const COLLECTIONS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements', 'depositMovements']
+const isEmpty = (snapshot: Snapshot) => COLLECTIONS.every(collection => !snapshot[collection]?.length)
 
 /**
  * Importación única del localStorage al backend: solo si el backend está vacío y existe `taurus-state`.
@@ -30,14 +30,14 @@ export async function importLocalOnce(store: Store, kv: KV): Promise<boolean> {
   } catch {
     return false
   }
-  let snap: Snapshot
+  let snapshot: Snapshot
   if (parsed?.version === 2) {
-    const { version: _v, ...rest } = parsed
-    snap = { ...emptySnapshot(), ...rest }
+    const { version: _version, ...rest } = parsed
+    snapshot = { ...emptySnapshot(), ...rest }
   } else {
-    snap = fromLegacy(parsed)
+    snapshot = fromLegacy(parsed)
   }
-  if (!isEmpty(snap)) await store.save(snap)
+  if (!isEmpty(snapshot)) await store.save(snapshot)
   kv.setItem(IMPORTED_KEY, new Date().toISOString())
-  return !isEmpty(snap)
+  return !isEmpty(snapshot)
 }
