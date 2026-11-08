@@ -58,6 +58,35 @@ Hhmm = Annotated[
 ]
 
 
+def _check_hhmm_text(value: Any) -> Any:
+    if isinstance(value, str) and not HHMM.match(value):
+        raise ValueError("Hora inválida, usa HH:MM")
+    return value
+
+
+# Hora HH:MM que se guarda como texto (columnas text).
+HhmmText = Annotated[str, AfterValidator(_check_hhmm_text)]
+
+
+def _check_name(value: str) -> str:
+    if not value.strip():
+        raise ValueError("El nombre es obligatorio")
+    return value
+
+
+def _check_sign(value: int) -> int:
+    if value not in (-1, 1):
+        raise ValueError("El signo debe ser 1 o -1")
+    return value
+
+
+Name = Annotated[str, AfterValidator(_check_name)]
+Sign = Annotated[int, AfterValidator(_check_sign)]
+# Código de catálogo: texto no vacío; el cliente valida contra el catálogo (con sync LWW un
+# registro puede llegar antes que su catálogo).
+Code = Annotated[str, Field(min_length=1)]
+
+
 class CamelModel(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, from_attributes=True)
 
@@ -122,7 +151,17 @@ class CashRec(DateIdRecord):
 
 class MovementRec(SyncRecord):
     date: date
-    type: Literal["expense", "withdrawal", "deposit"]
+    type: Code
+    amount: NonNeg
+    category_id: str | None = None
+    method: Annotated[Code, _none_to_default("cash")] = "cash"
+    note: str | None = None
+
+
+class FundMovementRec(SyncRecord):
+    date: date
+    category_id: str = Field(min_length=1)
+    type: Code
     amount: NonNeg
     note: str | None = None
 
@@ -141,7 +180,7 @@ class SettingRec(SyncRecord):
 class ServiceRec(SyncRecord):
     date: date
     amount: NonNeg
-    method: Literal["cash", "transfer"]
+    method: Code
     bonus: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
     is_indrive: Annotated[bool, _none_to_default(True)] = True
     commission: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
@@ -168,6 +207,36 @@ class ServiceRec(SyncRecord):
         return self
 
 
+class ShiftRec(SyncRecord):
+    date: date
+    start_time: HhmmText
+    end_time: HhmmText | None = None
+    note: str | None = None
+    template_id: str | None = None
+
+
+class ShiftTemplateRec(SyncRecord):
+    name: Name
+    start_time: HhmmText
+    end_time: HhmmText
+    sort_order: Annotated[int, _none_to_default(0)] = 0
+    active: Annotated[bool, _none_to_default(True)] = True
+
+
+class CatalogRec(SyncRecord):
+    name: Name
+    sort_order: Annotated[int, _none_to_default(0)] = 0
+    active: Annotated[bool, _none_to_default(True)] = True
+
+
+class PaymentMethodRec(CatalogRec):
+    affects_cash: bool
+
+
+class SignedCatalogRec(CatalogRec):
+    sign: Sign
+
+
 class SnapshotWrite(CamelModel):
     """Snapshot parcial: cualquier subconjunto de colecciones."""
 
@@ -177,7 +246,14 @@ class SnapshotWrite(CamelModel):
     cash: list[CashRec] = []
     movements: list[MovementRec] = []
     deposit_movements: list[DepositMovementRec] = []
+    fund_movements: list[FundMovementRec] = []
     settings: list[SettingRec] = []
+    shifts: list[ShiftRec] = []
+    shift_templates: list[ShiftTemplateRec] = []
+    payment_methods: list[PaymentMethodRec] = []
+    movement_types: list[SignedCatalogRec] = []
+    fund_movement_types: list[SignedCatalogRec] = []
+    expense_categories: list[CatalogRec] = []
 
 
 class SnapshotRead(SnapshotWrite):

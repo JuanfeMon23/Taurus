@@ -1,8 +1,12 @@
 <script setup lang="ts">
-import { ArrowLeftRight, ArrowUpCircle, Banknote, HandCoins, Lock, LockOpen, PiggyBank, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
-import type { CashDay, DayRecord, DepositMovement, MovementType } from '../services/types'
+import { ArrowLeftRight, Banknote, HandCoins, Lock, LockOpen, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
+import type { CashDay, DayRecord, DepositMovement } from '../services/types'
 import { cashSummary, closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
+import { defaultMethodId, entryName, EXPENSE_MOVEMENT_TYPE, methodAffectsCash, movementSign } from '../utils/catalogs'
+import { toUserMessage } from '../utils/errors'
 import { money } from '../utils/format'
+import { movementIcon, signTone } from '../utils/icons'
+import { validateCatalogEntryInput, validateMovementInput } from '../utils/validation'
 
 // Caja de la fecha recibida; `refreshKey` fuerza recarga cuando cambian los viajes del día.
 // `compact` (Hoy): sin movimientos ni gestión de salidas del depósito; eso vive en la página Caja.
@@ -21,17 +25,33 @@ const showClose = ref(false)
 const showReopen = ref(false)
 const showOutflow = ref(false)
 const outflow = reactive({ amount: null as number | null, note: '' })
-const newMovement = reactive({ type: 'expense' as MovementType, amount: null as number | null, note: '' })
+const NEW_CATEGORY = '__new__'
+const { catalogs, activeMethods, activeMovementTypes, activeExpenseCategories, defaultMethod, refreshCatalogs } = useCatalogs()
+const newMovement = reactive({ type: '', amount: null as number | null, note: '', categoryId: '', method: '' })
+const newCategoryName = ref('')
+const movementError = ref<string | null>(null)
 const { show } = useToast()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
-const TYPES = {
-  expense: { label: 'Gasto', icon: ArrowUpCircle, tone: 'neg' },
-  withdrawal: { label: 'Retiro', icon: HandCoins, tone: 'neg' },
-  deposit: { label: 'Aporte', icon: PiggyBank, tone: 'pos' },
-} as const
+const isExpense = computed(() => newMovement.type === EXPENSE_MOVEMENT_TYPE)
+const typeIndex = computed(() => Math.max(0, activeMovementTypes.value.findIndex(type => type.id === newMovement.type)))
+const methodIndex = computed(() => Math.max(0, activeMethods.value.findIndex(method => method.id === newMovement.method)))
+const typeLabel = (typeId: string) => entryName(catalogs.value.movementTypes, typeId)
+const cashMethodNames = computed(() => activeMethods.value.filter(method => method.affectsCash).map(method => method.name).join(' / ') || 'caja')
 
-const summary = computed(() => cashSummary(day.value, cash.value))
+const summary = computed(() => cashSummary(day.value, cash.value, catalogs.value))
+// Una línea por tipo de movimiento: los de resta siempre; los demás solo si tienen monto. Un código que no está en el catálogo se muestra con su código.
+const movementLines = computed(() => {
+  const known = catalogs.value.movementTypes.map(type => type.id)
+  const ids = [...activeMovementTypes.value.map(type => type.id), ...[...summary.value.totalsByType.keys()].filter(id => !known.includes(id))]
+  return ids
+    .map(id => ({ id, name: typeLabel(id), sign: movementSign(catalogs.value.movementTypes, id), amount: summary.value.totalsByType.get(id) ?? 0 }))
+    .filter(line => line.amount !== 0 || line.sign < 0)
+})
+// Ingresos de viajes en medios que no mueven la caja, con el nombre del medio.
+const offCashIncome = computed(() => [...summary.value.incomeByMethod]
+  .filter(([methodId, amount]) => amount > 0 && !methodAffectsCash(catalogs.value.paymentMethods, methodId))
+  .map(([methodId, amount]) => ({ id: methodId, name: entryName(catalogs.value.paymentMethods, methodId), amount })))
 const isOpen = computed(() => !!cash.value && !cash.value.closedAt)
 const balance = computed(() => depositBalance(allCash.value, outflows.value))
 // Cierre en curso: la base es lo contado o, sin conteo, el esperado.
@@ -47,14 +67,20 @@ async function load() {
   allCash.value = await taurus.repo.listCash()
   outflows.value = await taurus.repo.listDepositMovements()
   if (!cash.value && !openingTouched.value) {
-    opening.value = suggestedOpening(allCash.value, await taurus.repo.listDays(), props.date) ?? null
+    opening.value = suggestedOpening(allCash.value, await taurus.repo.listDays(), props.date, catalogs.value) ?? null
   }
 }
 onMounted(async () => {
   taurus = await useTaurus()
+  await refreshCatalogs()
+  resetMovement()
   await load()
 })
-onActivated(() => taurus && load())
+onActivated(async () => {
+  if (!taurus) return
+  await refreshCatalogs()
+  await load()
+})
 watch(() => props.date, () => { openingTouched.value = false })
 watch(() => [props.date, props.refreshKey], () => taurus && load())
 
@@ -78,13 +104,47 @@ async function close() {
   showClose.value = false
 }
 
+function resetMovement() {
+  Object.assign(newMovement, { type: activeMovementTypes.value[0]?.id ?? '', amount: null, note: '', categoryId: '', method: defaultMethod.value })
+  newCategoryName.value = ''
+}
+
+async function createCategory() {
+  movementError.value = validateCatalogEntryInput(newCategoryName.value, catalogs.value.expenseCategories.map(category => category.name))
+  if (movementError.value) return
+  try {
+    const created = await taurus.repo.saveCatalogEntry('expenseCategories', { name: newCategoryName.value })
+    await refreshCatalogs()
+    newMovement.categoryId = created.id
+    newCategoryName.value = ''
+  } catch (error) {
+    movementError.value = toUserMessage(error)
+  }
+}
+
 async function addMovement() {
-  if (!cash.value || !newMovement.amount) return
-  // id vacío: el dominio asigna un id único al guardarlo.
-  await save({ ...cash.value, movements: [...cash.value.movements, { id: '', type: newMovement.type, amount: newMovement.amount, note: newMovement.note || undefined }] }, `${TYPES[newMovement.type].label} registrado`)
-  Object.assign(newMovement, { amount: null, note: '' })
+  if (!cash.value) return
+  movementError.value = validateMovementInput(newMovement)
+  if (movementError.value || !newMovement.amount) return
+  if (newMovement.categoryId === NEW_CATEGORY) {
+    movementError.value = 'Crea la categoría nueva o elige otra.'
+    return
+  }
+  const categoryId = isExpense.value ? newMovement.categoryId : ''
+  try {
+    // id vacío: el dominio asigna un id único al guardarlo.
+    await save({ ...cash.value, movements: [...cash.value.movements, {
+      id: '', type: newMovement.type, amount: newMovement.amount, note: newMovement.note.trim() || undefined,
+      ...(categoryId ? { categoryId } : {}), method: isExpense.value ? newMovement.method : defaultMethodId(catalogs.value.paymentMethods),
+    }] }, `${typeLabel(newMovement.type)} registrado`)
+  } catch (error) {
+    movementError.value = toUserMessage(error)
+    return
+  }
+  resetMovement()
   showMovement.value = false
 }
+watch(showMovement, () => { movementError.value = null })
 async function addOutflow() {
   if (!outflow.amount || outflow.amount <= 0) return
   await taurus.repo.saveDepositMovement({ date: props.date, amount: outflow.amount, note: outflow.note.trim() || undefined })
@@ -125,18 +185,16 @@ const removeMovement = (id: string) =>
         <p class="total"><AnimatedNumber :value="summary.expected" /></p>
         <div class="lines">
           <div><span>Apertura</span><b class="num">{{ money(summary.opening) }}</b></div>
-          <div><span class="pos">+ Servicios en efectivo</span><b class="num">{{ money(summary.cashIncome) }}</b></div>
-          <div v-if="summary.deposits"><span class="pos">+ Aportes</span><b class="num">{{ money(summary.deposits) }}</b></div>
-          <div><span class="neg">− Gastos</span><b class="num">{{ money(summary.expenses) }}</b></div>
-          <div><span class="neg">− Retiros</span><b class="num">{{ money(summary.withdrawals) }}</b></div>
+          <div><span class="pos">+ Servicios ({{ cashMethodNames }})</span><b class="num">{{ money(summary.cashIncome) }}</b></div>
+          <div v-for="line in movementLines" :key="line.id"><span :class="line.sign > 0 ? 'pos' : line.sign < 0 ? 'neg' : ''">{{ line.sign > 0 ? '+' : line.sign < 0 ? '−' : '·' }} {{ line.name }}</span><b class="num">{{ money(line.amount) }}</b></div>
           <template v-if="!isOpen">
             <div><span>→ Al depósito</span><b class="num">{{ money(cash.toDeposit ?? 0) }}</b></div>
             <div><span>Queda en caja</span><b class="num">{{ money(closedKept) }}</b></div>
           </template>
           <div class="sep"><span>Saldo del depósito</span><b class="num">{{ money(balance) }}</b></div>
         </div>
-        <div v-if="summary.transferIncome" class="note">
-          <ArrowLeftRight :size="16" /> {{ money(summary.transferIncome) }} por transferencia (no entran a caja)
+        <div v-for="income in offCashIncome" :key="income.id" class="note">
+          <ArrowLeftRight :size="16" /> {{ money(income.amount) }} por {{ income.name.toLowerCase() }} (no entran a caja)
         </div>
         <button v-if="isOpen" class="btn primary block" @click="showClose = true"><Lock :size="18" /> Cerrar caja</button>
       </div>
@@ -150,12 +208,13 @@ const removeMovement = (id: string) =>
         <p v-if="!cash.movements.length" class="muted small">Sin movimientos.</p>
         <TransitionGroup name="list" tag="div" class="stack rel" style="gap: 8px">
           <div v-for="movement in cash.movements" :key="movement.id" class="row mv">
-            <span class="icon-tile" :class="TYPES[movement.type].tone"><component :is="TYPES[movement.type].icon" :size="20" /></span>
+            <span class="icon-tile" :class="signTone(movementSign(catalogs.movementTypes, movement.type))"><component :is="movementIcon(movement.type, movementSign(catalogs.movementTypes, movement.type))" :size="20" /></span>
             <div class="grow">
-              <b>{{ TYPES[movement.type].label }}</b>
+              <b>{{ typeLabel(movement.type) }}<span v-if="movement.categoryId"> · {{ entryName(catalogs.expenseCategories, movement.categoryId) }}</span></b>
+              <span v-if="movement.method && !methodAffectsCash(catalogs.paymentMethods, movement.method)" class="chip info tag">{{ entryName(catalogs.paymentMethods, movement.method) }}</span>
               <p v-if="movement.note" class="muted small">{{ movement.note }}</p>
             </div>
-            <b class="num" :class="TYPES[movement.type].tone">{{ TYPES[movement.type].tone === 'neg' ? '−' : '+' }} {{ money(movement.amount) }}</b>
+            <b class="num" :class="signTone(movementSign(catalogs.movementTypes, movement.type))">{{ movementSign(catalogs.movementTypes, movement.type) > 0 ? '+' : '−' }} {{ money(movement.amount) }}</b>
             <button class="btn icon ghost" aria-label="Eliminar" @click="removeMovement(movement.id)"><Trash2 :size="17" /></button>
           </div>
         </TransitionGroup>
@@ -216,10 +275,8 @@ const removeMovement = (id: string) =>
         <div class="lines">
           <div><span>Efectivo esperado</span><b class="num">{{ money(summary.expected) }}</b></div>
           <div><span>Apertura</span><b class="num">{{ money(summary.opening) }}</b></div>
-          <div><span class="pos">+ Servicios en efectivo</span><b class="num">{{ money(summary.cashIncome) }}</b></div>
-          <div v-if="summary.deposits"><span class="pos">+ Aportes</span><b class="num">{{ money(summary.deposits) }}</b></div>
-          <div><span class="neg">− Gastos</span><b class="num">{{ money(summary.expenses) }}</b></div>
-          <div><span class="neg">− Retiros</span><b class="num">{{ money(summary.withdrawals) }}</b></div>
+          <div><span class="pos">+ Servicios ({{ cashMethodNames }})</span><b class="num">{{ money(summary.cashIncome) }}</b></div>
+          <div v-for="line in movementLines" :key="line.id"><span :class="line.sign > 0 ? 'pos' : line.sign < 0 ? 'neg' : ''">{{ line.sign > 0 ? '+' : line.sign < 0 ? '−' : '·' }} {{ line.name }}</span><b class="num">{{ money(line.amount) }}</b></div>
         </div>
         <label class="field">
           <span>Contado (opcional)</span>
@@ -253,12 +310,29 @@ const removeMovement = (id: string) =>
 
     <BaseModal v-if="!compact" :open="showMovement" title="Nuevo movimiento" @close="showMovement = false">
       <form class="stack" @submit.prevent="addMovement">
-        <div class="seg" :style="{ '--n': 3, '--i': ['expense', 'withdrawal', 'deposit'].indexOf(newMovement.type) }">
+        <div class="seg" :style="{ '--n': Math.max(activeMovementTypes.length, 1), '--i': typeIndex }" role="group" aria-label="Tipo de movimiento">
           <span class="thumb" />
-          <button v-for="(movementType, typeKey) in TYPES" :key="typeKey" type="button" :class="{ active: newMovement.type === typeKey }" @click="newMovement.type = typeKey">{{ movementType.label }}</button>
+          <button v-for="movementType in activeMovementTypes" :key="movementType.id" type="button" :class="{ active: newMovement.type === movementType.id }" @click="newMovement.type = movementType.id">{{ movementType.name }}</button>
         </div>
+        <template v-if="isExpense">
+          <select v-model="newMovement.categoryId" aria-label="Categoría" class="input">
+            <option value="">Sin categoría</option>
+            <option v-for="category in activeExpenseCategories" :key="category.id" :value="category.id">{{ category.name }}</option>
+            <option :value="NEW_CATEGORY">+ Nueva categoría</option>
+          </select>
+          <div v-if="newMovement.categoryId === NEW_CATEGORY" class="row">
+            <input v-model="newCategoryName" type="text" maxlength="60" placeholder="Nombre de la categoría" aria-label="Nombre de la categoría nueva" class="input grow" @keydown.enter.prevent="createCategory">
+            <button type="button" class="btn" @click="createCategory"><Plus :size="16" /> Crear</button>
+          </div>
+          <div class="seg" :style="{ '--n': Math.max(activeMethods.length, 1), '--i': methodIndex }" role="group" aria-label="Medio de pago">
+            <span class="thumb" />
+            <button v-for="method in activeMethods" :key="method.id" type="button" :class="{ active: newMovement.method === method.id }" @click="newMovement.method = method.id">{{ method.name }}</button>
+          </div>
+          <p v-if="!methodAffectsCash(catalogs.paymentMethods, newMovement.method)" class="small muted">Con {{ entryName(catalogs.paymentMethods, newMovement.method).toLowerCase() }} no sale dinero de la caja.</p>
+        </template>
         <input v-model.number="newMovement.amount" type="number" inputmode="decimal" min="0" placeholder="Monto" aria-label="Monto" class="input">
         <input v-model="newMovement.note" type="text" placeholder="Nota (opcional)" aria-label="Nota" class="input">
+        <p v-if="movementError" class="err" role="alert">{{ movementError }}</p>
         <button type="submit" class="btn primary block"><Plus :size="18" /> Agregar</button>
       </form>
     </BaseModal>
@@ -285,5 +359,6 @@ const removeMovement = (id: string) =>
 .small-btn { padding: 6px 10px; font-size: 13px; }
 .err { color: var(--neg); font-size: 12px; font-weight: 600; }
 .note { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--info-soft); color: var(--info); font-size: 13px; font-weight: 600; }
+.tag { display: inline-flex; margin-top: 2px; font-size: 11px; padding: 2px 8px; }
 .mv { background: var(--surface-2); border-radius: 14px; padding: 10px; }
 </style>

@@ -4,6 +4,7 @@ import type { Category } from '../utils/calc'
 import { categoryRate } from '../utils/calc'
 import { percentToRate, ratesToPercent, validateRates, type RatesFormErrors } from '../utils/commission'
 import { rate } from '../utils/format'
+import { toUserMessage } from '../utils/errors'
 import { categoryIcon } from '../utils/icons'
 
 const categories = ref<Category[]>([])
@@ -36,7 +37,7 @@ async function saveCommission() {
     await taurus.repo.saveRates({ commissionRate: percentToRate(commissionForm.commissionPercent!), vatRate: percentToRate(commissionForm.vatPercent!) })
     show('Comisión inDrive guardada')
   } catch (error) {
-    show(error instanceof Error && error.message ? error.message : 'No se pudo guardar', 'error')
+    show(toUserMessage(error), 'error')
   }
 }
 onMounted(async () => {
@@ -120,6 +121,17 @@ async function add() {
       </div>
       <p class="muted small">Se calcula sobre el dinero del viaje sin bonus. Los cambios aplican a viajes nuevos o editados; los guardados conservan su comisión.</p>
     </div>
+
+    <ShiftTemplatesEditor />
+
+    <div class="card stack">
+      <span class="title">Catálogos</span>
+      <p class="muted small">Opciones de medios de pago, movimientos y categorías de gasto. Una opción en uso solo se desactiva.</p>
+    </div>
+    <CatalogEditor kind="paymentMethods" title="Medios de pago" hint="«Afecta caja» = el dinero entra o sale de la caja física." />
+    <CatalogEditor kind="movementTypes" title="Tipos de movimiento de caja" hint="«Suma» o «Resta» define cómo mueve el efectivo esperado." />
+    <CatalogEditor kind="fundMovementTypes" title="Tipos de movimiento de fondo" hint="«Suma» o «Resta» define cómo mueve el saldo del fondo." />
+    <CatalogEditor kind="expenseCategories" title="Categorías de gasto" />
 
     <div class="card stack">
       <span class="title">Nueva categoría</span>

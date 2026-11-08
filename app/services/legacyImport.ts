@@ -9,7 +9,7 @@ interface KV {
 export const LEGACY_KEY = 'taurus-state'
 export const IMPORTED_KEY = 'taurus-api-imported'
 
-const COLLECTIONS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements', 'depositMovements']
+const COLLECTIONS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements', 'depositMovements', 'fundMovements', 'shifts']
 const isEmpty = (snapshot: Snapshot) => COLLECTIONS.every(collection => !snapshot[collection]?.length)
 
 /**

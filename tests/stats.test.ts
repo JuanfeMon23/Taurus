@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { aggregate, summarize, bucketKey } from '../app/utils/stats'
+import { aggregate, summarize, bucketKey, UNCATEGORIZED_EXPENSE } from '../app/utils/stats'
 import type { DayRecord } from '../app/services/types'
 
 const buildDay = (date: string, gross: number, km: number, costs: [string, string, number][]): DayRecord => {
@@ -69,5 +69,67 @@ describe('comisión inDrive en estadísticas', () => {
   it('aggregate y summarize suman comisión + IVA y usan el neto del día', () => {
     expect(aggregate([withCommission, withCommission], 'month')[0]).toMatchObject({ commission: 2261, net: 17739 })
     expect(summarize([withCommission])).toMatchObject({ commission: 1130.5, net: 8869.5 })
+  })
+})
+
+describe('semana ISO', () => {
+  it('bucketKey agrupa lunes a domingo con clave AAAA-Www', () => {
+    expect(bucketKey('2026-11-02', 'week')).toBe('2026-W45')
+    expect(bucketKey('2026-11-08', 'week')).toBe('2026-W45')
+    expect(bucketKey('2026-11-09', 'week')).toBe('2026-W46')
+  })
+  it('usa el año ISO en los bordes', () => {
+    expect(bucketKey('2021-01-03', 'week')).toBe('2020-W53')
+    expect(bucketKey('2024-12-30', 'week')).toBe('2025-W01')
+  })
+  it('aggregate agrupa por semana en orden', () => {
+    const buckets = aggregate([buildDay('2026-11-09', 10, 1, []), buildDay('2026-11-08', 20, 1, []), buildDay('2026-11-02', 30, 1, [])], 'week')
+    expect(buckets.map(bucket => bucket.key)).toEqual(['2026-W45', '2026-W46'])
+    expect(buckets[0]!.gross).toBe(50)
+  })
+})
+
+describe('ingresos por medio de pago y gastos varios', () => {
+  const mixedDay = {
+    ...buildDay('2026-10-05', 0, 10, []),
+    services: [{ amount: 1000, bonus: 200, method: 'transfer' }, { amount: 500 }, { amount: 300, method: 'cash' }],
+    gross: 2000,
+    net: 2000,
+  }
+  const expenses = [
+    { date: '2026-10-05', amount: 100, categoryId: 'comida', method: 'cash' },
+    { date: '2026-10-20', amount: 50, categoryId: 'comida', method: 'transfer' },
+    { date: '2026-10-21', amount: 25, method: 'cash' },
+    { date: '2026-11-01', amount: 40, categoryId: 'peaje', method: 'cash' },
+  ]
+  const options = { defaultMethodId: 'cash' }
+  it('separa ingresos por código de medio (sin medio = el medio por defecto, incluye bonus)', () => {
+    const [bucket] = aggregate([mixedDay], 'month', [], options)
+    expect(bucket!.incomeByMethod.get('cash')).toBe(800)
+    expect(bucket!.incomeByMethod.get('transfer')).toBe(1200)
+    expect(bucket).toMatchObject({ expenses: 0, netAfterExpenses: 2000 })
+  })
+  it('agrega gastos por categoryId y netAfterExpenses', () => {
+    const buckets = aggregate([mixedDay], 'month', expenses, options)
+    expect(buckets.map(bucket => bucket.key)).toEqual(['2026-10', '2026-11'])
+    expect(buckets[0]!.expenses).toBe(175)
+    expect(buckets[0]!.expensesByCategory.get('comida')).toBe(150)
+    expect(buckets[0]!.expensesByCategory.get(UNCATEGORIZED_EXPENSE)).toBe(25)
+    expect(buckets[0]!.netAfterExpenses).toBe(1825)
+    expect(buckets[1]).toMatchObject({ gross: 0, expenses: 40, netAfterExpenses: -40 })
+  })
+  it('summarize incluye ingresos por medio y gastos', () => {
+    const summary = summarize([mixedDay], expenses, options)
+    expect(summary.incomeByMethod.get('cash')).toBe(800)
+    expect(summary.incomeByMethod.get('transfer')).toBe(1200)
+    expect(summary).toMatchObject({ expenses: 215, netAfterExpenses: 1785 })
+    expect(summary.expensesByCategory.get('peaje')).toBe(40)
+  })
+  it('summarize sin gastos', () => {
+    expect(summarize([mixedDay])).toMatchObject({ expenses: 0, netAfterExpenses: 2000 })
+  })
+  it('un viaje sin medio y sin medio por defecto queda en el grupo vacío', () => {
+    const [bucket] = aggregate([{ ...mixedDay, services: [{ amount: 10 }] }], 'month')
+    expect(bucket!.incomeByMethod.get('')).toBe(10)
   })
 })

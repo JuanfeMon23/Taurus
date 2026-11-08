@@ -7,11 +7,18 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.cash.models import CashDay, DepositMovement, Movement
+from app.modules.cash.models import CashDay, DepositMovement, FundMovement, Movement
+from app.modules.catalogs.models import (
+    ExpenseCategory,
+    FundMovementType,
+    MovementType,
+    PaymentMethod,
+)
 from app.modules.categories.models import Category
 from app.modules.days.models import Day
 from app.modules.services.models import Service
 from app.modules.settings.models import Setting
+from app.modules.shifts.models import Shift, ShiftTemplate
 
 DEFAULT_DATE = date(2026, 11, 4)
 
@@ -60,8 +67,9 @@ async def test_service_accepts_trip_fields(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def test_service_rejects_invalid_method(session: AsyncSession) -> None:
-    await assert_rejected(session, service(method="card"), "ck_services_method")
+async def test_service_method_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+    session.add(service(method="card"))
+    await session.flush()
 
 
 async def test_service_rejects_negative_amount(session: AsyncSession) -> None:
@@ -92,8 +100,9 @@ async def test_service_rejects_negative_bonus(session: AsyncSession) -> None:
     await assert_rejected(session, service(bonus=-1), "ck_services_bonus_non_negative")
 
 
-async def test_movement_rejects_invalid_type(session: AsyncSession) -> None:
-    await assert_rejected(session, movement(type="gift"), "ck_movements_type")
+async def test_movement_type_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+    session.add(movement(type="gift"))
+    await session.flush()
 
 
 @pytest.mark.parametrize("type_", ["expense", "withdrawal", "deposit"])
@@ -193,10 +202,11 @@ async def test_date_indexes_exist(session: AsyncSession) -> None:
         text(
             "select indexname from pg_indexes "
             "where indexname in ('ix_services_date', 'ix_movements_date', "
-            "'ix_deposit_movements_date')"
+            "'ix_deposit_movements_date', 'ix_fund_movements_date', "
+            "'ix_fund_movements_category_id')"
         )
     )
-    assert len(rows.all()) == 3
+    assert len(rows.all()) == 5
 
 
 async def test_service_commission_defaults(session: AsyncSession) -> None:
@@ -248,3 +258,198 @@ async def test_settings_reject_rates_out_of_range(
 ) -> None:
     rates = {"commission_rate": 0.1, "vat_rate": 0.1, **overrides}
     await assert_rejected(session, Setting(id="other", **rates), constraint)
+
+
+def fund(**overrides: Any) -> FundMovement:
+    return FundMovement(
+        **{
+            "id": "f1",
+            "date": DEFAULT_DATE,
+            "category_id": "c1",
+            "type": "transfer",
+            "amount": 10,
+            **overrides,
+        }
+    )
+
+
+async def test_movement_defaults_to_cash_without_category(session: AsyncSession) -> None:
+    session.add(movement())
+    await session.flush()
+    session.expire_all()
+    record = (await session.execute(select(Movement))).scalar_one()
+    assert record.method == "cash" and record.category_id is None
+
+
+async def test_movement_accepts_category_and_transfer(session: AsyncSession) -> None:
+    session.add(movement(category_id="comida", method="transfer"))
+    await session.flush()
+    session.expire_all()
+    record = (await session.execute(select(Movement))).scalar_one()
+    assert record.category_id == "comida" and record.method == "transfer"
+
+
+async def test_movement_method_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+    session.add(movement(method="card"))
+    await session.flush()
+
+
+async def test_fund_movement_defaults_and_roundtrip(session: AsyncSession) -> None:
+    session.add(fund())
+    await session.flush()
+    session.expire_all()
+    record = (await session.execute(select(FundMovement))).scalar_one()
+    assert record.deleted is False and record.note is None
+    assert record.amount == Decimal("10.00") and record.category_id == "c1"
+
+
+@pytest.mark.parametrize("type_", ["transfer", "spend"])
+async def test_fund_movement_accepts_valid_types(session: AsyncSession, type_: str) -> None:
+    session.add(fund(type=type_))
+    await session.flush()
+
+
+async def test_fund_movement_type_is_free_text_validated_by_catalog(
+    session: AsyncSession,
+) -> None:
+    session.add(fund(type="gift"))
+    await session.flush()
+
+
+async def test_fund_movement_rejects_negative_amount(session: AsyncSession) -> None:
+    await assert_rejected(session, fund(amount=-1), "ck_fund_movements_amount_non_negative")
+
+
+@pytest.mark.parametrize("bad", ["7:30", "24:00", "07:60", "0730", "07:30:00", ""])
+async def test_shift_rejects_bad_start_time_format(session: AsyncSession, bad: str) -> None:
+    await assert_rejected(
+        session,
+        Shift(id="sh1", date=DEFAULT_DATE, start_time=bad),
+        "ck_shifts_start_time_format",
+    )
+
+
+async def test_shift_rejects_bad_end_time_format(session: AsyncSession) -> None:
+    await assert_rejected(
+        session,
+        Shift(id="sh1", date=DEFAULT_DATE, start_time="04:30", end_time="25:00"),
+        "ck_shifts_end_time_format",
+    )
+
+
+async def test_shift_allows_open_and_midnight_crossing(session: AsyncSession) -> None:
+    session.add_all(
+        [
+            Shift(id="sh1", date=DEFAULT_DATE, start_time="14:30"),
+            Shift(id="sh2", date=DEFAULT_DATE, start_time="22:00", end_time="02:15"),
+            Shift(id="sh3", date=DEFAULT_DATE, start_time="04:30", end_time="07:30", note="a"),
+        ]
+    )
+    await session.flush()
+    rows = (await session.execute(select(Shift).order_by(Shift.id))).scalars().all()
+    assert [r.end_time for r in rows] == [None, "02:15", "07:30"]
+    assert all(r.deleted is False and r.updated_at is not None for r in rows)
+
+
+@pytest.mark.parametrize("name", ["", "   "])
+async def test_shift_template_rejects_empty_name(session: AsyncSession, name: str) -> None:
+    await assert_rejected(
+        session,
+        ShiftTemplate(id="t1", name=name, start_time="04:30", end_time="07:30"),
+        "ck_shift_templates_name_not_empty",
+    )
+
+
+@pytest.mark.parametrize("bad", ["7:30", "24:00", "07:60", ""])
+async def test_shift_template_rejects_bad_times(session: AsyncSession, bad: str) -> None:
+    await assert_rejected(
+        session,
+        ShiftTemplate(id="t1", name="A", start_time=bad, end_time="07:30"),
+        "ck_shift_templates_start_time_format",
+    )
+    await session.rollback()
+    await assert_rejected(
+        session,
+        ShiftTemplate(id="t2", name="A", start_time="04:30", end_time=bad),
+        "ck_shift_templates_end_time_format",
+    )
+
+
+async def test_shift_template_defaults_and_midnight_crossing(session: AsyncSession) -> None:
+    session.add(ShiftTemplate(id="t1", name="Noche", start_time="22:00", end_time="02:15"))
+    session.add(Shift(id="sh1", date=DEFAULT_DATE, start_time="22:00", template_id="t1"))
+    await session.flush()
+    row = (await session.execute(select(ShiftTemplate))).scalar_one()
+    assert row.sort_order == 0 and row.active is True and row.deleted is False
+    shift = (await session.execute(select(Shift))).scalar_one()
+    assert shift.template_id == "t1"
+
+
+async def test_catalog_seeds_present_with_old_timestamp(session: AsyncSession) -> None:
+    rows = await session.execute(
+        text(
+            "select 'payment_methods', id, name, sort_order, affects_cash::text "
+            "from payment_methods "
+            "union all select 'movement_types', id, name, sort_order, sign::text "
+            "from movement_types "
+            "union all select 'fund_movement_types', id, name, sort_order, sign::text "
+            "from fund_movement_types "
+            "union all select 'expense_categories', id, name, sort_order, '' "
+            "from expense_categories where id in ('comida', 'parqueadero', 'varios')"
+        )
+    )
+    got = {(r[0], r[1]): (r[2], r[3], r[4]) for r in rows}
+    assert got[("payment_methods", "cash")] == ("Efectivo", 1, "true")
+    assert got[("payment_methods", "transfer")] == ("Transferencia", 2, "false")
+    assert got[("movement_types", "expense")] == ("Gasto", 1, "-1")
+    assert got[("movement_types", "withdrawal")] == ("Retiro", 2, "-1")
+    assert got[("movement_types", "deposit")] == ("Aporte", 3, "1")
+    assert got[("fund_movement_types", "transfer")] == ("Env\u00edo", 1, "1")
+    assert got[("fund_movement_types", "spend")] == ("Gasto del fondo", 2, "-1")
+    assert {k[1] for k in got if k[0] == "expense_categories"} == {
+        "comida",
+        "parqueadero",
+        "varios",
+    }
+    recent = await session.scalar(
+        text(
+            "select count(*) from payment_methods where id in ('cash', 'transfer') "
+            "and updated_at <> '2000-01-01T00:00:00+00:00'"
+        )
+    )
+    assert recent == 0
+
+
+@pytest.mark.parametrize("model", [MovementType, FundMovementType])
+@pytest.mark.parametrize("sign", [0, 2, -2])
+async def test_type_catalog_rejects_invalid_sign(
+    session: AsyncSession, model: Any, sign: int
+) -> None:
+    constraint = f"ck_{model.__tablename__}_sign"
+    await assert_rejected(session, model(id="x", name="X", sign=sign), constraint)
+
+
+@pytest.mark.parametrize(
+    ("model", "extra"),
+    [
+        (PaymentMethod, {"affects_cash": True}),
+        (MovementType, {"sign": 1}),
+        (FundMovementType, {"sign": 1}),
+        (ExpenseCategory, {}),
+    ],
+)
+@pytest.mark.parametrize("name", ["", "   "])
+async def test_catalog_rejects_empty_name(
+    session: AsyncSession, model: Any, extra: dict[str, Any], name: str
+) -> None:
+    constraint = f"ck_{model.__tablename__}_name_not_empty"
+    await assert_rejected(session, model(id="x", name=name, **extra), constraint)
+
+
+async def test_catalog_defaults(session: AsyncSession) -> None:
+    session.add(ExpenseCategory(id="nueva", name="Nueva"))
+    await session.flush()
+    session.expire_all()
+    record = await session.get(ExpenseCategory, "nueva")
+    assert record is not None
+    assert record.sort_order == 0 and record.active is True and record.deleted is False

@@ -1,4 +1,4 @@
-import { Fuel, Receipt, ShieldCheck, Wrench } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeftRight, ArrowUpCircle, ArrowUpFromLine, Banknote, Fuel, HandCoins, PiggyBank, Receipt, ShieldCheck, Wrench } from 'lucide-vue-next'
 
 /** Icono de una categoría de costo según su nombre. */
 export function categoryIcon(name: string) {
@@ -7,3 +7,22 @@ export function categoryIcon(name: string) {
   if (/seguro|soat/i.test(name)) return ShieldCheck
   return Receipt
 }
+
+/* Íconos por código de catálogo: solo presentación; un código nuevo cae en el ícono genérico. */
+const METHOD_ICONS = { cash: Banknote, transfer: ArrowLeftRight }
+const MOVEMENT_ICONS = { expense: ArrowUpCircle, withdrawal: HandCoins, deposit: PiggyBank }
+const FUND_MOVEMENT_ICONS = { transfer: ArrowDownToLine, spend: ArrowUpFromLine }
+
+const pick = <Icon>(icons: Record<string, Icon>, code: string, fallback: Icon): Icon => icons[code] ?? fallback
+
+/** Ícono de un medio de pago; el genérico depende de si mueve el efectivo. */
+export const methodIcon = (code: string, affectsCash: boolean) => pick(METHOD_ICONS, code, affectsCash ? Banknote : ArrowLeftRight)
+
+/** Ícono de un tipo de movimiento de caja; el genérico depende del signo. */
+export const movementIcon = (code: string, sign: number) => pick(MOVEMENT_ICONS, code, sign > 0 ? PiggyBank : ArrowUpCircle)
+
+/** Ícono de un tipo de movimiento de fondo; el genérico depende del signo. */
+export const fundMovementIcon = (code: string, sign: number) => pick(FUND_MOVEMENT_ICONS, code, sign > 0 ? ArrowDownToLine : ArrowUpFromLine)
+
+/** Tono visual (clases `pos` / `neg` / `info`) según el signo. */
+export const signTone = (sign: number): 'pos' | 'neg' => (sign > 0 ? 'pos' : 'neg')

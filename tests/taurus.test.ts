@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createMemoryStore } from '../app/services/memoryStore'
 import { createTaurus } from '../app/services/taurus'
 import { mergeSnapshots } from '../app/services/merge'
+import { ApiError } from '../app/services/apiStore'
 
 async function setup() {
   const taurus = createTaurus(createMemoryStore())
@@ -137,6 +138,53 @@ describe('taurus: depósito', () => {
     expect(snapshot.depositMovements[0]!.deleted).toBe(true)
   })
 
+  it('turnos: guarda, lista por fecha ordenados, cierra el en curso y borra con lápida', async () => {
+    const taurus = await setup()
+    const afternoon = await taurus.repo.saveShift({ date: '2026-11-06', startTime: '14:00' })
+    const morning = await taurus.repo.saveShift({ date: '2026-11-06', startTime: '06:00', endTime: '10:00', note: 'mañana' })
+    await taurus.repo.saveShift({ date: '2026-11-05', startTime: '08:00', endTime: '12:00' })
+    expect((await taurus.repo.listShifts('2026-11-06')).map(shift => shift.id)).toEqual([morning.id, afternoon.id])
+    expect((await taurus.repo.listShifts('2026-11-06'))[1]!.endTime).toBeUndefined()
+    await taurus.repo.saveShift({ ...afternoon, endTime: '18:00' })
+    expect((await taurus.repo.listShifts('2026-11-06'))[1]!.endTime).toBe('18:00')
+    await taurus.repo.deleteShift(morning.id)
+    expect((await taurus.repo.listShifts('2026-11-06')).map(shift => shift.id)).toEqual([afternoon.id])
+    const tombstone = (await taurus.snapshot()).shifts.find(shift => shift.id === morning.id)
+    expect(tombstone?.deleted).toBe(true)
+  })
+
+  it('dayView incluye los turnos del día y deleteDay los borra', async () => {
+    const taurus = await setup()
+    await taurus.repo.saveShift({ date: '2026-11-06', startTime: '06:00', endTime: '10:00' })
+    const day = await taurus.saveDay({ date: '2026-11-06', km: 10, services: [{ amount: 1000 }] })
+    expect(day.shifts).toEqual([expect.objectContaining({ startTime: '06:00', endTime: '10:00' })])
+    await taurus.repo.deleteDay('2026-11-06')
+    expect(await taurus.repo.listShifts('2026-11-06')).toEqual([])
+  })
+
+  it('movimientos de fondo: guarda, lista (nuevo primero) y borra con lápida', async () => {
+    const taurus = await setup()
+    const transfer = await taurus.repo.saveFundMovement({ date: '2026-11-01', categoryId: 'cat-gasolina', type: 'transfer', amount: 50000, note: 'envío' })
+    const spend = await taurus.repo.saveFundMovement({ date: '2026-11-05', categoryId: 'cat-gasolina', type: 'spend', amount: 20000 })
+    expect(transfer.id).toBeTruthy()
+    expect((await taurus.repo.listFundMovements()).map(movement => movement.id)).toEqual([spend.id, transfer.id])
+    await taurus.repo.deleteFundMovement(transfer.id)
+    expect((await taurus.repo.listFundMovements()).map(movement => movement.id)).toEqual([spend.id])
+    const snapshot = await taurus.snapshot()
+    expect(snapshot.fundMovements).toHaveLength(2)
+    expect(snapshot.fundMovements.find(movement => movement.id === transfer.id)!.deleted).toBe(true)
+  })
+
+  it('movimientos de caja conservan categoryId y medio; sin medio quedan con el medio por defecto del catálogo', async () => {
+    const taurus = await setup()
+    await taurus.repo.putCash({ date: '2026-11-07', opening: 0, openedAt: '2026-11-07T07:00:00', movements: [
+      { id: '', type: 'expense', amount: 8000, categoryId: 'comida', method: 'transfer' },
+      { id: '', type: 'expense', amount: 3000 },
+    ] })
+    const cash = await taurus.repo.getCash('2026-11-07')
+    expect(cash!.movements.map(movement => [movement.categoryId, movement.method])).toEqual([['comida', 'transfer'], [undefined, 'cash']])
+  })
+
   it('getRates devuelve las tasas por defecto y saveRates las guarda', async () => {
     const taurus = await setup()
     expect(await taurus.repo.getRates()).toEqual({ commissionRate: 0.095, vatRate: 0.19 })
@@ -164,5 +212,77 @@ describe('taurus: depósito', () => {
     await taurus.saveDay({ date: '2026-10-14', km: 0, services: [{ amount: 9000, isIndrive: true, commission: 855, commissionVat: 162.45 }] })
     await taurus.repo.saveRates({ commissionRate: 0.2, vatRate: 0.19 })
     expect((await taurus.repo.getDay('2026-10-14'))!.commission).toBe(855)
+  })
+
+  it('plantillas de turno: guarda, lista solo activas ordenadas, edita y borra con lápida', async () => {
+    const taurus = await setup()
+    const noon = await taurus.repo.saveShiftTemplate({ name: 'Mediodía', startTime: '12:00', endTime: '14:00' })
+    const night = await taurus.repo.saveShiftTemplate({ name: 'Noche', startTime: '19:00', endTime: '23:00', sortOrder: 5 })
+    const early = await taurus.repo.saveShiftTemplate({ name: 'Madrugada', startTime: '05:00', endTime: '08:00', active: false })
+    expect(noon.id).toBeTruthy()
+    expect((await taurus.repo.listShiftTemplates()).map(template => template.name)).toEqual(['Mediodía', 'Noche'])
+    expect((await taurus.repo.listShiftTemplates({ includeInactive: true })).map(template => template.name)).toEqual(['Mediodía', 'Noche', 'Madrugada'])
+    await taurus.repo.saveShiftTemplate({ ...early, active: true, sortOrder: -1 })
+    expect((await taurus.repo.listShiftTemplates()).map(template => template.name)).toEqual(['Madrugada', 'Mediodía', 'Noche'])
+    await taurus.repo.deleteShiftTemplate(night.id)
+    expect((await taurus.repo.listShiftTemplates()).map(template => template.name)).toEqual(['Madrugada', 'Mediodía'])
+    expect((await taurus.snapshot()).shiftTemplates.find(template => template.id === night.id)?.deleted).toBe(true)
+  })
+
+  it('el turno conserva templateId y desmarcar la plantilla deja lápida solo a ese turno', async () => {
+    const taurus = await setup()
+    const template = await taurus.repo.saveShiftTemplate({ name: 'Mediodía', startTime: '12:00', endTime: '14:00' })
+    const fromTemplate = await taurus.repo.saveShift({ date: '2026-11-07', startTime: '12:00', endTime: '14:00', templateId: template.id })
+    const loose = await taurus.repo.saveShift({ date: '2026-11-07', startTime: '16:00', endTime: '17:00' })
+    expect(fromTemplate.templateId).toBe(template.id)
+    expect(loose.templateId).toBeUndefined()
+    const adjusted = await taurus.repo.saveShift({ ...fromTemplate, startTime: '12:30' })
+    expect(adjusted.templateId).toBe(template.id)
+    await taurus.repo.deleteShift(adjusted.id)
+    expect((await taurus.repo.listShifts('2026-11-07')).map(shift => shift.id)).toEqual([loose.id])
+  })
+
+  it('un almacén local sin catálogos los siembra; uno con catálogos no se toca', async () => {
+    const taurus = await setup()
+    const catalogs = await taurus.repo.listCatalogs()
+    expect(catalogs.paymentMethods.map(method => method.id)).toEqual(['cash', 'transfer'])
+    expect(catalogs.movementTypes.map(type => [type.id, type.sign])).toEqual([['expense', -1], ['withdrawal', -1], ['deposit', 1]])
+    expect(catalogs.fundMovementTypes.map(type => type.id)).toEqual(['transfer', 'spend'])
+    expect(catalogs.expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero', 'varios'])
+    const store = createMemoryStore()
+    await store.save({ paymentMethods: [{ id: 'nequi', name: 'Nequi', affectsCash: false, sortOrder: 0, active: true, updatedAt: 'x' }] })
+    const other = createTaurus(store)
+    await other.init()
+    expect((await other.repo.listCatalogs()).paymentMethods.map(method => method.id)).toEqual(['nequi'])
+  })
+
+  it('crea una entrada de catálogo con código a partir del nombre y la ordena al final', async () => {
+    const taurus = await setup()
+    const created = await taurus.repo.saveCatalogEntry('expenseCategories', { name: 'Peaje Norte' })
+    expect(created).toEqual({ id: 'peaje-norte', name: 'Peaje Norte', sortOrder: 3, active: true })
+    expect((await taurus.repo.listCatalogs()).expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero', 'varios', 'peaje-norte'])
+    const method = await taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Nequi', affectsCash: false })
+    expect(method).toMatchObject({ id: 'nequi', affectsCash: false, active: true })
+    await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: 'comida' })).rejects.toThrow(ApiError)
+    await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: '---' })).rejects.toThrow(ApiError)
+  })
+
+  it('edita una entrada (nombre, orden, activo) conservando su código', async () => {
+    const taurus = await setup()
+    const [first] = (await taurus.repo.listCatalogs()).movementTypes
+    const edited = await taurus.repo.saveCatalogEntry('movementTypes', { ...first!, name: 'Gasto de ruta', active: false })
+    expect(edited).toMatchObject({ id: first!.id, name: 'Gasto de ruta', active: false, sign: first!.sign })
+  })
+
+  it('no permite borrar un código en uso; sin uso deja lápida y puede recrearse', async () => {
+    const taurus = await setup()
+    await taurus.saveDay({ date: '2026-11-07', km: 0, services: [{ amount: 5000, method: 'transfer' }] })
+    await expect(taurus.repo.deleteCatalogEntry('paymentMethods', 'transfer')).rejects.toThrow(/en uso/)
+    await taurus.repo.deleteCatalogEntry('expenseCategories', 'varios')
+    expect((await taurus.repo.listCatalogs()).expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero'])
+    expect((await taurus.snapshot()).expenseCategories.find(category => category.id === 'varios')?.deleted).toBe(true)
+    const again = await taurus.repo.saveCatalogEntry('expenseCategories', { name: 'Varios' })
+    expect(again.id).toBe('varios')
+    expect((await taurus.repo.listCatalogs()).expenseCategories.map(category => category.id)).toContain('varios')
   })
 })

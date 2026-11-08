@@ -1,11 +1,16 @@
 import { computeDay, type Category } from '../utils/calc'
+import { catalogEntryInUse, defaultMethodId, slugifyCode, sortCatalog } from '../utils/catalogs'
 import { DEFAULT_RATES, dayNet, sumCommission, type CommissionRates } from '../utils/commission'
 import { tripTotal } from '../utils/trip'
+import { sortShiftTemplates } from '../utils/shifts'
+import { ApiError } from './apiStore'
+import { SEED_CATALOGS } from './catalogSeeds'
 import { EPOCH, newId, now } from './ids'
 import { upsert } from './memoryStore'
 import { same } from './merge'
 import type {
-  CashDay, CashMeta, CategoryRec, DayMeta, DayRecord, DepositMovement, DepositMovementRec, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Snapshot, Store,
+  CashDay, CashMeta, CatalogEntry, CatalogKind, Catalogs, CategoryRec, DayMeta, DayRecord, DepositMovement, DepositMovementRec, FundMovement, FundMovementRec, Meta, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Shift, ShiftRec,
+  ShiftTemplate, ShiftTemplateRec, Snapshot, Store,
 } from './types'
 
 export interface DayInput {
@@ -35,9 +40,29 @@ function tripFields<T extends object>(target: T, from: Service): T {
   return target
 }
 
+const shiftView = (shift: ShiftRec): Shift => ({
+  id: shift.id, date: shift.date, startTime: shift.startTime,
+  ...(shift.endTime ? { endTime: shift.endTime } : {}), ...(shift.note ? { note: shift.note } : {}), ...(shift.templateId ? { templateId: shift.templateId } : {}),
+})
+
+const shiftsOf = (snapshot: Snapshot, date: string): Shift[] =>
+  live(snapshot.shifts).filter(shift => shift.date === date).sort((first, second) => first.startTime.localeCompare(second.startTime)).map(shiftView)
+
 const RATES_ID = 'rates'
 
 const live = <T extends { deleted?: boolean }>(items: T[]) => items.filter(item => !item.deleted)
+
+/** Quita los campos de sincronización y deja la vista de dominio. */
+const withoutMeta = <T extends Meta>({ updatedAt: _updatedAt, deleted: _deleted, ...view }: T): Omit<T, 'updatedAt' | 'deleted'> => view
+
+const nextSortOrder = (entries: { sortOrder: number }[]) => entries.reduce((highest, entry) => Math.max(highest, entry.sortOrder + 1), 0)
+
+const CATALOG_KINDS: CatalogKind[] = ['paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories']
+
+const methodField = (method: string | undefined) => (method ? { method } : {})
+
+/** Medio de pago de un registro: el suyo o, si no trae, el primero activo del catálogo. */
+const methodOrDefault = (snapshot: Snapshot, method: string | undefined): string | undefined => method ?? defaultMethodId(live(snapshot.paymentMethods))
 
 /**
  * Sincroniza una lista hija (servicios de un día, movimientos de una caja):
@@ -79,7 +104,7 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     const totalCost = costs.reduce((sum, cost) => sum + cost.amount, 0)
     const { commission, commissionVat } = sumCommission(services)
     return {
-      date, km: meta?.km ?? 0, note: meta?.note, costs, gross, totalCost, commission, commissionVat,
+      date, km: meta?.km ?? 0, note: meta?.note, shifts: shiftsOf(snapshot, date), costs, gross, totalCost, commission, commissionVat,
       net: dayNet(gross, totalCost, commission, commissionVat),
       services: services.map(service => tripFields({ id: service.id, amount: service.amount, method: service.method, note: service.note }, service)),
     }
@@ -91,7 +116,10 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     return {
       date, opening: cashMeta.opening, openedAt: cashMeta.openedAt, closedAt: cashMeta.closedAt, counted: cashMeta.counted,
       ...(cashMeta.toDeposit !== undefined ? { toDeposit: cashMeta.toDeposit } : {}),
-      movements: live(snapshot.movements).filter(movement => movement.date === date).map(movement => ({ id: movement.id, type: movement.type, amount: movement.amount, note: movement.note })),
+      movements: live(snapshot.movements).filter(movement => movement.date === date).map(movement => ({
+        id: movement.id, type: movement.type, amount: movement.amount, note: movement.note,
+        ...(movement.categoryId ? { categoryId: movement.categoryId } : {}), ...methodField(methodOrDefault(snapshot, movement.method)),
+      })),
     }
   }
 
@@ -123,7 +151,8 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const timestamp = now()
       const days = snapshot.days.filter(day => day.id === date && !day.deleted).map(day => ({ ...day, deleted: true, updatedAt: timestamp }))
       const services = live(snapshot.services).filter(service => service.date === date).map(service => ({ ...service, deleted: true, updatedAt: timestamp }))
-      await put({ days, services })
+      const shifts = live(snapshot.shifts).filter(shift => shift.date === date).map(shift => ({ ...shift, deleted: true, updatedAt: timestamp }))
+      await put({ days, services, shifts })
     },
     async getCash(date) {
       return cashView(await loadState(), date)
@@ -142,7 +171,10 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const movements = diffChildren<MovementRec>(
         live(snapshot.movements).filter(movement => movement.date === cashDay.date),
         cashDay.movements.map(movement => ({ ...movement, id: movement.id || undefined })),
-        (item, id, editedAt) => ({ id, date: cashDay.date, type: item.type, amount: item.amount, note: item.note, updatedAt: editedAt }),
+        (item, id, editedAt) => ({
+          id, date: cashDay.date, type: item.type, amount: item.amount, note: item.note,
+          ...(item.categoryId ? { categoryId: item.categoryId } : {}), ...methodField(methodOrDefault(snapshot, item.method)), updatedAt: editedAt,
+        }),
         timestamp,
       )
       await put({ cash: [meta], movements })
@@ -156,6 +188,84 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const record: DepositMovementRec = { id: movement.id ?? newId(), date: movement.date, amount: movement.amount, note: movement.note || undefined, updatedAt: now() }
       await put({ depositMovements: [record] })
       return { id: record.id, date: record.date, amount: record.amount, note: record.note }
+    },
+    async listFundMovements() {
+      return live((await loadState()).fundMovements)
+        .map(movement => ({ id: movement.id, date: movement.date, categoryId: movement.categoryId, type: movement.type, amount: movement.amount, note: movement.note }) as FundMovement)
+        .sort((movementA, movementB) => movementB.date.localeCompare(movementA.date))
+    },
+    async saveFundMovement(movement) {
+      const record: FundMovementRec = {
+        id: movement.id ?? newId(), date: movement.date, categoryId: movement.categoryId, type: movement.type, amount: movement.amount,
+        note: movement.note || undefined, updatedAt: now(),
+      }
+      await put({ fundMovements: [record] })
+      return { id: record.id, date: record.date, categoryId: record.categoryId, type: record.type, amount: record.amount, note: record.note }
+    },
+    async deleteFundMovement(id) {
+      const previous = (await loadState()).fundMovements.find(movement => movement.id === id && !movement.deleted)
+      if (previous) await put({ fundMovements: [{ ...previous, deleted: true, updatedAt: now() }] })
+    },
+    async listShifts(date) {
+      return shiftsOf(await loadState(), date)
+    },
+    async saveShift(shift) {
+      const record: ShiftRec = {
+        id: shift.id ?? newId(), date: shift.date, startTime: shift.startTime,
+        ...(shift.endTime ? { endTime: shift.endTime } : {}), ...(shift.note ? { note: shift.note } : {}), ...(shift.templateId ? { templateId: shift.templateId } : {}),
+        updatedAt: now(),
+      }
+      await put({ shifts: [record] })
+      return shiftView(record)
+    },
+    async deleteShift(id) {
+      const previous = (await loadState()).shifts.find(shift => shift.id === id && !shift.deleted)
+      if (previous) await put({ shifts: [{ ...previous, deleted: true, updatedAt: now() }] })
+    },
+    async listShiftTemplates(options = {}) {
+      const templates = live((await loadState()).shiftTemplates).map(withoutMeta) as ShiftTemplate[]
+      return sortShiftTemplates(options.includeInactive ? templates : templates.filter(template => template.active))
+    },
+    async saveShiftTemplate(template) {
+      const snapshot = await loadState()
+      const previous = template.id ? snapshot.shiftTemplates.find(existing => existing.id === template.id) : undefined
+      const record: ShiftTemplateRec = {
+        id: template.id ?? newId(), name: template.name.trim(), startTime: template.startTime, endTime: template.endTime,
+        sortOrder: template.sortOrder ?? previous?.sortOrder ?? nextSortOrder(live(snapshot.shiftTemplates)),
+        active: template.active ?? previous?.active ?? true, updatedAt: now(),
+      }
+      await put({ shiftTemplates: [record] })
+      return withoutMeta(record)
+    },
+    async deleteShiftTemplate(id) {
+      const previous = (await loadState()).shiftTemplates.find(template => template.id === id && !template.deleted)
+      if (previous) await put({ shiftTemplates: [{ ...previous, deleted: true, updatedAt: now() }] })
+    },
+    async listCatalogs(): Promise<Catalogs> {
+      const snapshot = await loadState()
+      return Object.fromEntries(CATALOG_KINDS.map(kind => [kind, sortCatalog(live(snapshot[kind] as (CatalogEntry & Meta)[]).map(withoutMeta))])) as unknown as Catalogs
+    },
+    async saveCatalogEntry(kind, entry) {
+      const snapshot = await loadState()
+      const entries = snapshot[kind] as (CatalogEntry & Meta)[]
+      const id = entry.id ?? slugifyCode(entry.name)
+      if (!id) throw new ApiError('El nombre debe tener letras o números.')
+      const previous = entries.find(existing => existing.id === id)
+      if (!entry.id && previous && !previous.deleted) throw new ApiError('Ya existe una opción con ese nombre.')
+      const revived = previous?.deleted ? undefined : previous
+      const record = {
+        ...revived, ...entry, id, name: entry.name.trim(),
+        sortOrder: entry.sortOrder ?? revived?.sortOrder ?? nextSortOrder(live(entries)),
+        active: entry.active ?? revived?.active ?? true, updatedAt: now(),
+      } as CatalogEntry & Meta
+      await put({ [kind]: [record] })
+      return withoutMeta(record) as never
+    },
+    async deleteCatalogEntry(kind, id) {
+      const snapshot = await loadState()
+      if (catalogEntryInUse(snapshot, kind, id)) throw new ApiError('No se puede borrar: está en uso. Desactívala para dejar de ofrecerla.')
+      const previous = (snapshot[kind] as (CatalogEntry & Meta)[]).find(entry => entry.id === id && !entry.deleted)
+      if (previous) await put({ [kind]: [{ ...previous, deleted: true, updatedAt: now() }] })
     },
     async getRates(): Promise<CommissionRates> {
       const record = live((await loadState()).settings).find(setting => setting.id === RATES_ID)
@@ -179,6 +289,8 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     async init() {
       const snapshot = await loadState()
       if (snapshot.categories.length === 0) await put({ categories: structuredClone(SEED) }, true)
+      // Solo un almacén local nuevo: con el backend los catálogos ya vienen sembrados desde la BD.
+      if (CATALOG_KINDS.every(kind => snapshot[kind].length === 0)) await put(structuredClone(SEED_CATALOGS), true)
     },
 
     /** Guarda el día congelando las tarifas de las categorías activas ahora. */
@@ -186,6 +298,11 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const snapshot = await loadState()
       const timestamp = now()
       const categories = live(snapshot.categories)
+      const serviceMethod = (method: string | undefined): string => {
+        const resolved = methodOrDefault(snapshot, method)
+        if (!resolved) throw new ApiError('No hay medios de pago; agrega uno en Tarifas > Catálogos.')
+        return resolved
+      }
       const { costs } = computeDay({ services: input.services.map(tripTotal), km: input.km, categories })
       const previous = snapshot.days.find(day => day.id === input.date && !day.deleted)
       const meta: DayMeta = { id: input.date, date: input.date, km: input.km, note: input.note, costs, updatedAt: timestamp }
@@ -193,7 +310,7 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       const services = diffChildren<ServiceRec>(
         live(snapshot.services).filter(service => service.date === input.date),
         input.services,
-        (item, id, editedAt) => tripFields({ id, date: input.date, amount: item.amount, method: item.method ?? 'cash', note: item.note, updatedAt: editedAt }, item),
+        (item, id, editedAt) => tripFields({ id, date: input.date, amount: item.amount, method: serviceMethod(item.method), note: item.note, updatedAt: editedAt }, item),
         timestamp,
       )
       await put({ days: changedMeta ? [meta] : [], services })

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../app/utils/cash'
 import type { CashDay, DayRecord, DepositMovement } from '../app/services/types'
+import { testCatalogs } from './fixtures/catalogs'
+
+const catalogs = testCatalogs()
 
 const cash = (date: string, overrides: Partial<CashDay> = {}): CashDay => ({
   date, opening: 50000, openedAt: `${date}T07:00:00`, movements: [], ...overrides,
@@ -55,11 +58,11 @@ describe('apertura sugerida', () => {
       cash('2026-11-01', { closedAt: 'x', counted: 90000, toDeposit: 40000 }),
       cash('2026-11-02', { closedAt: 'x', counted: 120000, toDeposit: 70000 }),
     ]
-    expect(suggestedOpening(cashes, [], '2026-11-04')).toBe(50000)
+    expect(suggestedOpening(cashes, [], '2026-11-04', catalogs)).toBe(50000)
   })
   it('sin conteo usa el esperado como base', () => {
     const cashes = [cash('2026-11-02', { opening: 50000, closedAt: 'x', toDeposit: 30000 })]
-    expect(suggestedOpening(cashes, [day('2026-11-02', [40000])], '2026-11-03')).toBe(60000)
+    expect(suggestedOpening(cashes, [day('2026-11-02', [40000])], '2026-11-03', catalogs)).toBe(60000)
   })
   it('ignora cajas abiertas, de la misma fecha o posteriores', () => {
     const cashes = [
@@ -67,9 +70,9 @@ describe('apertura sugerida', () => {
       cash('2026-11-03', { counted: 99999 }),
       cash('2026-11-04', { closedAt: 'x', counted: 88888 }),
     ]
-    expect(suggestedOpening(cashes, [], '2026-11-04')).toBe(70000)
+    expect(suggestedOpening(cashes, [], '2026-11-04', catalogs)).toBe(70000)
   })
   it('sin cierres previos no sugiere nada', () => {
-    expect(suggestedOpening([], [], '2026-11-04')).toBeUndefined()
+    expect(suggestedOpening([], [], '2026-11-04', catalogs)).toBeUndefined()
   })
 })

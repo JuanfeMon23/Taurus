@@ -4,11 +4,18 @@ from pydantic.alias_generators import to_camel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db.base import Base
-from app.modules.cash.models import CashDay, DepositMovement, Movement
+from app.modules.cash.models import CashDay, DepositMovement, FundMovement, Movement
+from app.modules.catalogs.models import (
+    ExpenseCategory,
+    FundMovementType,
+    MovementType,
+    PaymentMethod,
+)
 from app.modules.categories.models import Category
 from app.modules.days.models import Day
 from app.modules.services.models import Service
 from app.modules.settings.models import Setting
+from app.modules.shifts.models import Shift, ShiftTemplate
 from app.modules.snapshot import repository
 from app.modules.snapshot.schemas import SnapshotRead, SnapshotResult, SnapshotWrite
 
@@ -20,7 +27,14 @@ MODELS: dict[str, type[Base]] = {
     "cash": CashDay,
     "movements": Movement,
     "deposit_movements": DepositMovement,
+    "fund_movements": FundMovement,
     "settings": Setting,
+    "shifts": Shift,
+    "shift_templates": ShiftTemplate,
+    "payment_methods": PaymentMethod,
+    "movement_types": MovementType,
+    "fund_movement_types": FundMovementType,
+    "expense_categories": ExpenseCategory,
 }
 
 

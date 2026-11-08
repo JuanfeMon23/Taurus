@@ -14,7 +14,14 @@ TABLES = {
     "movements",
     "services",
     "deposit_movements",
+    "fund_movements",
     "settings",
+    "shifts",
+    "shift_templates",
+    "payment_methods",
+    "movement_types",
+    "fund_movement_types",
+    "expense_categories",
 }
 
 
@@ -129,3 +136,97 @@ async def test_0004_backfills_live_services_and_seeds_rates(
             await conn.execute(text("delete from services where id in ('live', 'dead')"))
         alembic("upgrade", "head")
         await engine.dispose()
+
+
+async def test_funds_added_and_removed_by_0005(test_url: str, alembic: Callable[..., None]) -> None:
+    new_columns = {"category_id", "method"}
+    assert new_columns <= await _columns(test_url, "movements")
+    assert "fund_movements" in await _tables(test_url)
+    alembic("downgrade", "0004")
+    try:
+        assert not new_columns & await _columns(test_url, "movements")
+        assert "fund_movements" not in await _tables(test_url)
+    finally:
+        alembic("upgrade", "head")
+    assert new_columns <= await _columns(test_url, "movements")
+    assert "fund_movements" in await _tables(test_url)
+
+
+async def test_shifts_table_added_and_removed_by_0006(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    assert "shifts" in await _tables(test_url)
+    alembic("downgrade", "0005")
+    try:
+        assert "shifts" not in await _tables(test_url)
+    finally:
+        alembic("upgrade", "head")
+    assert "shifts" in await _tables(test_url)
+
+
+async def test_shift_templates_added_and_removed_by_0007(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    assert "shift_templates" in await _tables(test_url)
+    assert "template_id" in await _columns(test_url, "shifts")
+    alembic("downgrade", "0006")
+    try:
+        assert "shift_templates" not in await _tables(test_url)
+        assert "template_id" not in await _columns(test_url, "shifts")
+    finally:
+        alembic("upgrade", "head")
+    assert "shift_templates" in await _tables(test_url)
+    assert "template_id" in await _columns(test_url, "shifts")
+
+
+async def test_0008_backfills_category_and_roundtrips(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    engine = create_async_engine(test_url)
+    alembic("downgrade", "0007")
+    try:
+        assert "category" in await _columns(test_url, "movements")
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into movements (id, date, type, amount, category, method, deleted) "
+                    "values ('a', '2026-11-01', 'expense', 5, '  Gasolina ', 'cash', false), "
+                    "('b', '2026-11-01', 'expense', 5, 'GASOLINA', 'cash', false), "
+                    "('c', '2026-11-01', 'expense', 5, 'comida', 'cash', false), "
+                    "('d', '2026-11-01', 'expense', 5, '   ', 'cash', false), "
+                    "('e', '2026-11-01', 'expense', 5, null, 'cash', false)"
+                )
+            )
+        alembic("upgrade", "0008")
+        assert "category" not in await _columns(test_url, "movements")
+        async with engine.connect() as conn:
+            ids = {
+                r.id: r.category_id
+                for r in await conn.execute(text("select id, category_id from movements"))
+            }
+            cats = {
+                r.id: r.name
+                for r in await conn.execute(text("select id, name from expense_categories"))
+            }
+        assert ids == {"a": "gasolina", "b": "gasolina", "c": "comida", "d": None, "e": None}
+        assert set(cats) == {"comida", "parqueadero", "varios", "gasolina"}
+        assert cats["comida"] == "Comida" and cats["gasolina"] in {"Gasolina", "GASOLINA"}
+        async with engine.begin() as conn:
+            await conn.execute(text("update movements set method = 'card' where id = 'e'"))
+        alembic("downgrade", "0007")
+        async with engine.connect() as conn:
+            restored = {
+                r.id: (r.category, r.method)
+                for r in await conn.execute(text("select id, category, method from movements"))
+            }
+        assert restored["c"] == ("Comida", "cash")
+        assert restored["a"][0] == restored["b"][0] == cats["gasolina"]
+        assert restored["d"][0] is None and restored["e"] == (None, "cash")
+        names = await _tables(test_url)
+        assert "payment_methods" not in names and "expense_categories" not in names
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from movements where id in ('a','b','c','d','e')"))
+        alembic("upgrade", "head")
+        await engine.dispose()
+    assert "category_id" in await _columns(test_url, "movements")

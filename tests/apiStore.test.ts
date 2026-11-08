@@ -22,6 +22,31 @@ describe('apiStore', () => {
     expect(snapshot.settings).toEqual([])
   })
 
+  it('load conserva fundMovements y completa la colección si falta', async () => {
+    const withFunds = await createApiStore('http://x', async () => json(200, { fundMovements: [{ id: 'f', categoryId: 'cat-gasolina', type: 'transfer', amount: 1, date: '2026-11-01', updatedAt: 'x', deleted: false }] })).load()
+    expect(withFunds.fundMovements).toHaveLength(1)
+    expect((await createApiStore('http://x', async () => json(200, {})).load()).fundMovements).toEqual([])
+    expect((await createApiStore('http://x', async () => json(200, {})).load()).shifts).toEqual([])
+    const withShifts = await createApiStore('http://x', async () => json(200, { shifts: [{ id: 's', date: '2026-11-06', startTime: '06:00', updatedAt: 'x', deleted: false }] })).load()
+    expect(withShifts.shifts).toHaveLength(1)
+  })
+
+  it('load conserva plantillas de turno y catálogos, y los completa vacíos si faltan', async () => {
+    const body = {
+      shiftTemplates: [{ id: 't', name: 'Mediodía', startTime: '12:00', endTime: '14:00', sortOrder: 0, active: true, updatedAt: 'x', deleted: false }],
+      paymentMethods: [{ id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: 'x', deleted: false }],
+      shifts: [{ id: 's', date: '2026-11-06', startTime: '12:00', templateId: 't', updatedAt: 'x', deleted: false }],
+      movements: [{ id: 'm', date: '2026-11-06', type: 'expense', amount: 1, categoryId: 'comida', method: 'cash', updatedAt: 'x', deleted: false }],
+    }
+    const loaded = await createApiStore('http://x', async () => json(200, body)).load()
+    expect(loaded.shiftTemplates[0]).toMatchObject({ name: 'Mediodía' })
+    expect(loaded.paymentMethods).toHaveLength(1)
+    expect(loaded.shifts[0]).toMatchObject({ templateId: 't' })
+    expect(loaded.movements[0]).toMatchObject({ categoryId: 'comida' })
+    const empty = await createApiStore('http://x', async () => json(200, {})).load()
+    expect([empty.shiftTemplates, empty.paymentMethods, empty.movementTypes, empty.fundMovementTypes, empty.expenseCategories]).toEqual([[], [], [], [], []])
+  })
+
   it('load conserva settings y los campos de comisión del servicio', async () => {
     const body = {
       settings: [{ id: 'rates', commissionRate: 0.095, vatRate: 0.19, updatedAt: 'x', deleted: false }],

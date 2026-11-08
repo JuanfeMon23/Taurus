@@ -47,7 +47,14 @@ async def test_get_devuelve_todas_las_colecciones(client: AsyncClient) -> None:
         "cash",
         "movements",
         "depositMovements",
+        "fundMovements",
         "settings",
+        "shifts",
+        "shiftTemplates",
+        "paymentMethods",
+        "movementTypes",
+        "fundMovementTypes",
+        "expenseCategories",
     }
 
 
@@ -238,9 +245,11 @@ async def test_dia_con_id_distinto_de_fecha_422(client: AsyncClient) -> None:
     assert (await put(client, {"days": [day]})).status_code == 422
 
 
-async def test_enum_invalido_422(client: AsyncClient) -> None:
+async def test_metodo_vacio_422_y_codigo_desconocido_se_acepta(client: AsyncClient) -> None:
+    assert (await put(client, {"services": [svc(method="")]})).status_code == 422
     response = await put(client, {"services": [svc(method="card")]})
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert (await get_col(client, "services"))[0]["method"] == "card"
 
 
 def cash(**overrides: Any) -> dict[str, Any]:
@@ -383,3 +392,261 @@ async def test_settings_tasa_fuera_de_rango_422_en_espanol(client: AsyncClient) 
         response = await put(client, {"settings": [body]})
         assert response.status_code == 422
         assert "entre 0 y 1" in str(response.json()["details"])
+
+
+def fund(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id": "f1",
+        "date": "2026-11-04",
+        "categoryId": "c1",
+        "type": "transfer",
+        "amount": 25.5,
+        "updatedAt": T1,
+        **overrides,
+    }
+
+
+def movement(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id": "m1",
+        "date": "2026-11-04",
+        "type": "expense",
+        "amount": 3,
+        "updatedAt": T1,
+        **overrides,
+    }
+
+
+async def test_fund_movements_put_y_get(client: AsyncClient) -> None:
+    response = await put(client, {"fundMovements": [fund(note="comida")]})
+    assert response.json()["applied"]["fundMovements"] == 1
+    record = (await get_col(client, "fundMovements"))[0]
+    assert record["id"] == "f1" and record["categoryId"] == "c1"
+    assert record["type"] == "transfer" and record["amount"] == 25.5
+    assert record["note"] == "comida" and record["deleted"] is False
+    assert record["updatedAt"].startswith("2026-11-04T10:00:00")
+
+
+async def test_fund_movements_nota_ausente_se_omite(client: AsyncClient) -> None:
+    await put(client, {"fundMovements": [fund(type="spend")]})
+    assert (await get_col(client, "fundMovements"))[0].get("note") is None
+
+
+async def test_fund_movements_lww_y_lapida(client: AsyncClient) -> None:
+    await put(client, {"fundMovements": [fund(amount=20, updatedAt=T2)]})
+    response = await put(client, {"fundMovements": [fund(amount=99)]})
+    assert response.json()["skipped"]["fundMovements"] == 1
+    assert (await get_col(client, "fundMovements"))[0]["amount"] == 20
+    await put(client, {"fundMovements": [fund(amount=20, updatedAt=T2, deleted=True)]})
+    await put(client, {"fundMovements": [fund(amount=5, updatedAt=T2)]})
+    assert (await get_col(client, "fundMovements"))[0]["deleted"] is True
+
+
+async def test_fund_movements_tipo_vacio_422_y_desconocido_se_acepta(
+    client: AsyncClient,
+) -> None:
+    response = await put(client, {"fundMovements": [fund(type="")]})
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+    assert (await put(client, {"fundMovements": [fund(type="gift")]})).status_code == 200
+
+
+async def test_fund_movements_monto_negativo_422(client: AsyncClient) -> None:
+    assert (await put(client, {"fundMovements": [fund(amount=-1)]})).status_code == 422
+
+
+async def test_movimiento_categoria_put_y_get(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(categoryId="gasolina")]})
+    assert (await get_col(client, "movements"))[0]["categoryId"] == "gasolina"
+
+
+async def test_movimiento_categoria_ausente_o_null_se_omite(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(), movement(id="m2", categoryId=None)]})
+    for record in await get_col(client, "movements"):
+        assert "categoryId" not in record
+
+
+async def test_movimiento_metodo_por_defecto_es_cash(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(), movement(id="m2", method=None)]})
+    assert [record["method"] for record in await get_col(client, "movements")] == ["cash", "cash"]
+
+
+async def test_movimiento_metodo_transfer_y_lww(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(method="transfer", updatedAt=T2)]})
+    await put(client, {"movements": [movement(method="cash", updatedAt=T1)]})
+    assert (await get_col(client, "movements"))[0]["method"] == "transfer"
+
+
+async def test_movimiento_metodo_o_tipo_vacio_422_y_desconocido_se_acepta(
+    client: AsyncClient,
+) -> None:
+    for field in ("method", "type"):
+        assert (await put(client, {"movements": [movement(**{field: ""})]})).status_code == 422
+    assert (
+        await put(client, {"movements": [movement(method="card", type="x")]})
+    ).status_code == 200
+
+
+def shift(**overrides: Any) -> dict[str, Any]:
+    return {"id": "sh1", "date": "2026-11-04", "startTime": "08:00", "updatedAt": T1, **overrides}
+
+
+async def test_turno_se_guarda_y_se_lee_con_camel_case(client: AsyncClient) -> None:
+    response = await put(client, {"shifts": [shift(endTime="14:30", note="mañana")]})
+    assert response.status_code == 200
+    assert response.json()["applied"]["shifts"] == 1
+    [stored] = await get_col(client, "shifts")
+    assert stored == {
+        "id": "sh1",
+        "date": "2026-11-04",
+        "startTime": "08:00",
+        "endTime": "14:30",
+        "note": "mañana",
+        "updatedAt": "2026-11-04T10:00:00Z",
+        "deleted": False,
+    }
+
+
+async def test_turno_en_curso_no_trae_end_time(client: AsyncClient) -> None:
+    await put(client, {"shifts": [shift()]})
+    [stored] = await get_col(client, "shifts")
+    assert "endTime" not in stored
+
+
+async def test_turno_cruza_medianoche(client: AsyncClient) -> None:
+    response = await put(client, {"shifts": [shift(startTime="22:00", endTime="02:00")]})
+    assert response.status_code == 200
+
+
+async def test_turno_lww_y_lapida(client: AsyncClient) -> None:
+    await put(client, {"shifts": [shift(updatedAt=T2, startTime="09:00")]})
+    old = await put(client, {"shifts": [shift(updatedAt=T1, startTime="07:00")]})
+    assert old.json()["skipped"]["shifts"] == 1
+    tombstone = await put(client, {"shifts": [shift(updatedAt=T_FUTURE, deleted=True)]})
+    assert tombstone.json()["applied"]["shifts"] == 1
+    [stored] = await get_col(client, "shifts")
+    assert stored["deleted"] is True
+
+
+async def test_turno_hora_invalida_devuelve_422_en_espanol(client: AsyncClient) -> None:
+    for field, value in (("startTime", "8:00"), ("startTime", "24:00"), ("endTime", "12:60")):
+        response = await put(client, {"shifts": [shift(**{field: value})]})
+        assert response.status_code == 422
+        assert "Hora inválida, usa HH:MM" in response.text
+
+
+async def test_turno_guarda_template_id_opcional(client: AsyncClient) -> None:
+    await put(client, {"shifts": [shift(templateId="tpl1")]})
+    [stored] = await get_col(client, "shifts")
+    assert stored["templateId"] == "tpl1"
+
+
+def shift_template(**overrides: Any) -> dict[str, Any]:
+    return {
+        "id": "tpl1",
+        "name": "Mañana",
+        "startTime": "06:00",
+        "endTime": "14:00",
+        "updatedAt": T1,
+        **overrides,
+    }
+
+
+async def test_plantilla_se_guarda_y_se_lee_con_camel_case(client: AsyncClient) -> None:
+    response = await put(client, {"shiftTemplates": [shift_template(sortOrder=2)]})
+    assert response.status_code == 200
+    assert response.json()["applied"]["shiftTemplates"] == 1
+    [stored] = await get_col(client, "shiftTemplates")
+    assert stored == {
+        "id": "tpl1",
+        "name": "Mañana",
+        "startTime": "06:00",
+        "endTime": "14:00",
+        "sortOrder": 2,
+        "active": True,
+        "updatedAt": "2026-11-04T10:00:00Z",
+        "deleted": False,
+    }
+
+
+async def test_plantilla_valores_por_defecto(client: AsyncClient) -> None:
+    await put(client, {"shiftTemplates": [shift_template()]})
+    [stored] = await get_col(client, "shiftTemplates")
+    assert stored["sortOrder"] == 0
+    assert stored["active"] is True
+
+
+async def test_plantilla_lww_y_lapida(client: AsyncClient) -> None:
+    await put(client, {"shiftTemplates": [shift_template(updatedAt=T2, name="Nueva")]})
+    old = await put(client, {"shiftTemplates": [shift_template(updatedAt=T1, name="Vieja")]})
+    assert old.json()["skipped"]["shiftTemplates"] == 1
+    tombstone = await put(
+        client, {"shiftTemplates": [shift_template(updatedAt=T_FUTURE, deleted=True)]}
+    )
+    assert tombstone.json()["applied"]["shiftTemplates"] == 1
+    [stored] = await get_col(client, "shiftTemplates")
+    assert stored["deleted"] is True
+
+
+async def test_plantilla_hora_invalida_devuelve_422_en_espanol(client: AsyncClient) -> None:
+    for field, value in (("startTime", "8:00"), ("endTime", "12:60")):
+        response = await put(client, {"shiftTemplates": [shift_template(**{field: value})]})
+        assert response.status_code == 422
+        assert "Hora inválida, usa HH:MM" in response.text
+
+
+async def test_plantilla_nombre_vacio_devuelve_422(client: AsyncClient) -> None:
+    for name in ("", "   "):
+        response = await put(client, {"shiftTemplates": [shift_template(name=name)]})
+        assert response.status_code == 422
+        assert "El nombre es obligatorio" in response.text
+
+
+def catalog_item(**overrides: Any) -> dict[str, Any]:
+    return {"id": "tst-item", "name": "Prueba", "updatedAt": T1, **overrides}
+
+
+CATALOGS = {
+    "paymentMethods": {"affectsCash": True},
+    "movementTypes": {"sign": -1},
+    "fundMovementTypes": {"sign": 1},
+    "expenseCategories": {},
+}
+
+
+async def test_catalogos_se_guardan_y_se_leen_en_camel_case(client: AsyncClient) -> None:
+    for collection, extra in CATALOGS.items():
+        item = catalog_item(sortOrder=7, **extra)
+        response = await put(client, {collection: [item]})
+        assert response.json()["applied"][collection] == 1
+        stored = {rec["id"]: rec for rec in await get_col(client, collection)}["tst-item"]
+        assert stored["name"] == "Prueba" and stored["sortOrder"] == 7
+        assert stored["active"] is True and stored["deleted"] is False
+        for key, value in extra.items():
+            assert stored[key] == value
+
+
+async def test_catalogos_lww_y_lapida(client: AsyncClient) -> None:
+    for collection, extra in CATALOGS.items():
+        await put(client, {collection: [catalog_item(name="Nueva", updatedAt=T2, **extra)]})
+        old = await put(client, {collection: [catalog_item(name="Vieja", **extra)]})
+        assert old.json()["skipped"][collection] == 1
+        await put(client, {collection: [catalog_item(updatedAt=T_FUTURE, deleted=True, **extra)]})
+        stored = {rec["id"]: rec for rec in await get_col(client, collection)}["tst-item"]
+        assert stored["deleted"] is True and stored["name"] == "Prueba"
+
+
+async def test_catalogos_nombre_vacio_422(client: AsyncClient) -> None:
+    for collection, extra in CATALOGS.items():
+        for name in ("", "   "):
+            response = await put(client, {collection: [catalog_item(name=name, **extra)]})
+            assert response.status_code == 422
+            assert "El nombre es obligatorio" in response.text
+
+
+async def test_catalogos_signo_invalido_422(client: AsyncClient) -> None:
+    for collection in ("movementTypes", "fundMovementTypes"):
+        for sign in (0, 2):
+            response = await put(client, {collection: [catalog_item(sign=sign)]})
+            assert response.status_code == 422
+            assert "El signo debe ser 1 o -1" in response.text

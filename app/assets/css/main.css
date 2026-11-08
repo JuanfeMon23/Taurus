@@ -144,8 +144,8 @@ input, select { font: inherit; color: inherit; }
   transition: transform 0.15s var(--ease), background 0.2s;
 }
 .chip:active { transform: scale(0.94); }
-.chip.cash { background: var(--pos-soft); color: var(--pos); }
-.chip.transfer { background: var(--info-soft); color: var(--info); }
+.chip.pos { background: var(--pos-soft); color: var(--pos); }
+.chip.info { background: var(--info-soft); color: var(--info); }
 
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .badge.open { background: var(--pos-soft); color: var(--pos); }

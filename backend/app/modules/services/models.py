@@ -12,7 +12,6 @@ class Service(SyncMixin, Base):
 
     __tablename__ = "services"
     __table_args__ = (
-        CheckConstraint("method in ('cash', 'transfer')", name="method"),
         CheckConstraint("amount >= 0", name="amount_non_negative"),
         CheckConstraint("distance_km >= 0", name="distance_km_non_negative"),
         CheckConstraint("bonus >= 0", name="bonus_non_negative"),

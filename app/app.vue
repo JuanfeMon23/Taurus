@@ -1,23 +1,27 @@
 <script setup lang="ts">
 import { Capacitor } from '@capacitor/core'
-import { BarChart3, CalendarDays, CircleCheck, CircleAlert, Cloud, CloudOff, History as HistoryIcon, Moon, SlidersHorizontal, Sun, Wallet } from 'lucide-vue-next'
+import { BarChart3, CalendarDays, CircleCheck, CircleAlert, Cloud, CloudOff, History as HistoryIcon, Moon, PiggyBank, SlidersHorizontal, Sun, Wallet } from 'lucide-vue-next'
 import AppSidebar from './components/AppSidebar.vue'
 import SyncSheet from './components/SyncSheet.vue'
 import Cash from './components/Cash.vue'
+import Funds from './components/Funds.vue'
 import DayForm from './components/DayForm.vue'
 import HistoryView from './components/History.vue'
 import Rates from './components/Rates.vue'
 import Stats from './components/Stats.vue'
 
-const tabs = [
+const allTabs = [
   { key: 'hoy', label: 'Hoy', icon: CalendarDays, view: DayForm },
   { key: 'caja', label: 'Caja', icon: Wallet, view: Cash },
+  { key: 'fondos', label: 'Fondos', icon: PiggyBank, view: Funds },
   { key: 'historial', label: 'Historial', icon: HistoryIcon, view: HistoryView },
   { key: 'stats', label: 'Estadísticas', icon: BarChart3, view: Stats },
   { key: 'tarifas', label: 'Tarifas', icon: SlidersHorizontal, view: Rates },
 ] as const
 
 const native = Capacitor.isNativePlatform()
+// Fondos es solo de escritorio: el APK (congelado) conserva sus cinco pestañas.
+const tabs = native ? allTabs.filter(tab => tab.key !== 'fondos') : allTabs
 const index = ref(0)
 const SIDEBAR_KEY = 'taurus-sidebar-collapsed'
 const collapsed = ref(false)

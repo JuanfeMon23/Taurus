@@ -1,5 +1,5 @@
 import type { CostLine } from '../../utils/calc'
-import { emptySnapshot, type MovementType, type Snapshot } from '../types'
+import { emptySnapshot, type Snapshot } from '../types'
 
 export type Cell = string | number
 export type SheetRows = Cell[][]
@@ -73,14 +73,14 @@ export function fromSheets(sheets: Record<string, SheetRows>): Snapshot {
   }
   for (const row of body(sheets.Servicios, 5)) {
     snapshot.services.push({
-      ...meta(row, 5), date: String(row[1]), amount: num(row[2]) ?? 0, method: row[3] === 'transfer' ? 'transfer' : 'cash', note: str(row[4]),
+      ...meta(row, 5), date: String(row[1]), amount: num(row[2]) ?? 0, method: str(row[3]) ?? 'cash', note: str(row[4]),
     })
   }
   for (const row of body(sheets.Caja, 5)) {
     snapshot.cash.push({ ...meta(row, 5), date: String(row[0]), opening: num(row[1]) ?? 0, openedAt: String(row[2] ?? ''), closedAt: str(row[3]), counted: num(row[4]) })
   }
   for (const row of body(sheets.Movimientos, 5)) {
-    snapshot.movements.push({ ...meta(row, 5), date: String(row[1]), type: String(row[2]) as MovementType, amount: num(row[3]) ?? 0, note: str(row[4]) })
+    snapshot.movements.push({ ...meta(row, 5), date: String(row[1]), type: String(row[2]), amount: num(row[3]) ?? 0, note: str(row[4]) })
   }
   return snapshot
 }

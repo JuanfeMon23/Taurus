@@ -50,7 +50,10 @@ async function readLegacy(db: SQLiteDBConnection) {
   return { categories, days, cash }
 }
 
-const KINDS: Collection[] = ['categories', 'days', 'services', 'cash', 'movements', 'depositMovements']
+const KINDS: Collection[] = [
+  'categories', 'days', 'services', 'cash', 'movements', 'depositMovements', 'fundMovements', 'shifts',
+  'shiftTemplates', 'paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories',
+]
 
 function statements(changes: Partial<Snapshot>) {
   const out: { statement: string; values: unknown[] }[] = []

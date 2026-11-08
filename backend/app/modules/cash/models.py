@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Date, DateTime, Index, Numeric, Text
+from sqlalchemy import CheckConstraint, Date, DateTime, Index, Numeric, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base, SyncMixin
@@ -28,7 +28,6 @@ class CashDay(SyncMixin, Base):
 class Movement(SyncMixin, Base):
     __tablename__ = "movements"
     __table_args__ = (
-        CheckConstraint("type in ('expense', 'withdrawal', 'deposit')", name="type"),
         CheckConstraint("amount >= 0", name="amount_non_negative"),
         Index("ix_movements_date", "date"),
     )
@@ -37,6 +36,9 @@ class Movement(SyncMixin, Base):
     type: Mapped[str] = mapped_column(Text)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str | None] = mapped_column(Text)
+    # Sin FK a los catálogos (type, method, category_id): sync LWW por registro.
+    category_id: Mapped[str | None] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(Text, server_default=text("'cash'"))
 
 
 class DepositMovement(SyncMixin, Base):
@@ -49,5 +51,25 @@ class DepositMovement(SyncMixin, Base):
     )
 
     date: Mapped[date] = mapped_column(Date)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    note: Mapped[str | None] = mapped_column(Text)
+
+
+class FundMovement(SyncMixin, Base):
+    """Fondo por categoría de costo: 'transfer' = envío al fondo, 'spend' = gasto pagado con él.
+
+    `category_id` sin FK: el sync LWW por registro puede traer el movimiento antes que su categoría.
+    """
+
+    __tablename__ = "fund_movements"
+    __table_args__ = (
+        CheckConstraint("amount >= 0", name="amount_non_negative"),
+        Index("ix_fund_movements_date", "date"),
+        Index("ix_fund_movements_category_id", "category_id"),
+    )
+
+    date: Mapped[date] = mapped_column(Date)
+    category_id: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(Text)
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str | None] = mapped_column(Text)

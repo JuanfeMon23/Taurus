@@ -20,6 +20,13 @@ const snapshot: Snapshot = {
     { id: 'm1', date: '2026-10-15', type: 'expense', amount: 8000, note: 'almuerzo', updatedAt: T },
     { id: 'm2', date: '2026-10-15', type: 'deposit', amount: 20000, updatedAt: T },
   ],
+  fundMovements: [], // idem fondos
+  shifts: [], // Sheets ignora los turnos
+  shiftTemplates: [], // ni las plantillas
+  paymentMethods: [], // ni los catálogos
+  movementTypes: [],
+  fundMovementTypes: [],
+  expenseCategories: [],
   depositMovements: [], // Sheets ignora el depósito (APK congelado)
   settings: [], // Sheets ignora los ajustes (comisión inDrive)
 }
@@ -60,6 +67,14 @@ describe('mapeo a Google Sheets', () => {
     sheets.Servicios!.push(['', '2026-10-15', 5, 'cash', '', T, ''])
     sheets.Servicios!.push(['s9', '2026-10-15', 5, 'cash', '', '', ''])
     expect(fromSheets(sheets).services).toHaveLength(3)
+  })
+
+  it('conserva cualquier código de medio de pago del catálogo y usa efectivo si la celda viene vacía', () => {
+    const sheets = toSheets(snapshot)
+    sheets.Servicios![1]![3] = 'nequi'
+    sheets.Servicios![2]![3] = ''
+    const back = fromSheets(sheets)
+    expect(back.services.map(service => service.method)).toEqual(['nequi', 'cash', 'cash'])
   })
 
   it('hojas ausentes producen un snapshot vacío', () => {
