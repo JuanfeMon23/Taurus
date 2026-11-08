@@ -14,13 +14,14 @@ const props = defineProps<{ kind: CatalogKind; title: string; hint?: string }>()
 const { catalogs, refreshCatalogs } = useCatalogs()
 const { show } = useToast()
 const snapshot = ref<Pick<Snapshot, 'services' | 'movements' | 'fundMovements'> | null>(null)
-const draft = reactive({ name: '', affectsCash: true, sign: 1 as 1 | -1 })
+const draft = reactive({ name: '', affectsCash: true, sign: 1 as 1 | -1, hasCategory: false })
 const draftError = ref<string | null>(null)
 const rowError = ref<{ id: string; message: string } | null>(null)
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
-const entries = computed(() => catalogs.value[props.kind] as (CatalogEntry & { affectsCash?: boolean; sign?: 1 | -1 })[])
+const entries = computed(() => catalogs.value[props.kind] as (CatalogEntry & { affectsCash?: boolean; sign?: 1 | -1; hasCategory?: boolean })[])
 const hasSign = computed(() => props.kind === 'movementTypes' || props.kind === 'fundMovementTypes')
+const hasCategoryFlag = computed(() => props.kind === 'movementTypes')
 const hasAffectsCash = computed(() => props.kind === 'paymentMethods')
 const inUse = (id: string) => !!snapshot.value && catalogEntryInUse(snapshot.value, props.kind, id)
 
@@ -70,8 +71,8 @@ async function remove(entry: CatalogEntry) {
 async function add() {
   draftError.value = validateCatalogEntryInput(draft.name, entries.value.map(entry => entry.name))
   if (draftError.value) return
-  const extra = hasAffectsCash.value ? { affectsCash: draft.affectsCash } : hasSign.value ? { sign: draft.sign } : {}
-  if (await persist({ name: draft.name, ...extra }, 'Agregado')) Object.assign(draft, { name: '', affectsCash: true, sign: 1 })
+  const extra = hasAffectsCash.value ? { affectsCash: draft.affectsCash } : hasSign.value ? { sign: draft.sign, ...(hasCategoryFlag.value ? { hasCategory: draft.hasCategory } : {}) } : {}
+  if (await persist({ name: draft.name, ...extra }, 'Agregado')) Object.assign(draft, { name: '', affectsCash: true, sign: 1, hasCategory: false })
 }
 </script>
 
@@ -94,6 +95,10 @@ async function add() {
         :title="inUse(entry.id) ? 'En uso: no se puede cambiar' : 'Si suma o resta al saldo'" @click="persist({ ...entry, sign: entry.sign === 1 ? -1 : 1 })">
         {{ entry.sign === 1 ? 'Suma' : 'Resta' }}
       </button>
+      <button v-if="hasCategoryFlag" type="button" class="chip" :class="entry.hasCategory ? 'pos' : 'info'" :aria-pressed="!!entry.hasCategory"
+        title="Si el movimiento pide categoría de gasto" @click="persist({ ...entry, hasCategory: !entry.hasCategory })">
+        {{ entry.hasCategory ? 'Lleva categoría' : 'Sin categoría' }}
+      </button>
       <button class="switch" :class="{ on: entry.active }" role="switch" :aria-checked="entry.active" :aria-label="`Activar ${entry.name}`" @click="persist({ ...entry, active: !entry.active })" />
       <button type="button" class="btn icon ghost" :disabled="inUse(entry.id)" :aria-label="`Eliminar ${entry.name}`" :title="inUse(entry.id) ? 'En uso: solo se puede desactivar' : 'Eliminar'" @click="remove(entry)">
         <Trash2 :size="16" />
@@ -108,6 +113,9 @@ async function add() {
       </button>
       <button v-if="hasSign" type="button" class="chip" :class="draft.sign === 1 ? 'pos' : 'info'" @click="draft.sign = draft.sign === 1 ? -1 : 1">
         {{ draft.sign === 1 ? 'Suma' : 'Resta' }}
+      </button>
+      <button v-if="hasCategoryFlag" type="button" class="chip" :class="draft.hasCategory ? 'pos' : 'info'" :aria-pressed="draft.hasCategory" @click="draft.hasCategory = !draft.hasCategory">
+        {{ draft.hasCategory ? 'Lleva categoría' : 'Sin categoría' }}
       </button>
       <button type="submit" class="btn primary"><Plus :size="16" /> Agregar</button>
       <small v-if="draftError" class="err" role="alert">{{ draftError }}</small>

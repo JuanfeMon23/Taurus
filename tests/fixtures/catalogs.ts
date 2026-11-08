@@ -7,9 +7,9 @@ export const testCatalogs = (): Catalogs => ({
     { id: 'transfer', name: 'Transferencia', affectsCash: false, sortOrder: 1, active: true },
   ],
   movementTypes: [
-    { id: 'expense', name: 'Gasto', sign: -1, sortOrder: 0, active: true },
-    { id: 'withdrawal', name: 'Retiro', sign: -1, sortOrder: 1, active: true },
-    { id: 'deposit', name: 'Aporte', sign: 1, sortOrder: 2, active: true },
+    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, sortOrder: 0, active: true },
+    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, sortOrder: 1, active: true },
+    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, sortOrder: 2, active: true },
   ],
   fundMovementTypes: [
     { id: 'transfer', name: 'Envío', sign: 1, sortOrder: 0, active: true },

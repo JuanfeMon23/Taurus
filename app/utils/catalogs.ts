@@ -1,11 +1,5 @@
 /** Lógica pura de catálogos (medios de pago, tipos de movimiento, categorías de gasto). Los datos viven en BD, no aquí. */
-import type { CatalogEntry, CatalogKind, PaymentMethod, SignedEntry, Snapshot } from '../services/types'
-
-/**
- * Código del tipo de movimiento que representa un gasto (lleva categoría y alimenta «Gastos varios»).
- * Es la única referencia a un código concreto: el catálogo no tiene una marca «es gasto».
- */
-export const EXPENSE_MOVEMENT_TYPE = 'expense'
+import type { CatalogEntry, CatalogKind, MovementTypeEntry, PaymentMethod, SignedEntry, Snapshot } from '../services/types'
 
 /** Orden de presentación: `sortOrder` y luego nombre. Devuelve una copia. */
 export const sortCatalog = <Entry extends CatalogEntry>(entries: Entry[]): Entry[] =>
@@ -38,6 +32,9 @@ export function methodAffectsCash(methods: PaymentMethod[], code: string | undef
 
 /** Signo del tipo (+1 suma, −1 resta). Regla segura: un código que no está en el catálogo vale 0 y no mueve nada. */
 export const movementSign = (types: SignedEntry[], code: string): 1 | -1 | 0 => types.find(type => type.id === code)?.sign ?? 0
+
+/** ¿El tipo lleva categoría de gasto (y cuenta en «Gastos varios»)? Un código que no está en el catálogo no la lleva. */
+export const movementTypeHasCategory = (types: MovementTypeEntry[], code: string): boolean => types.find(type => type.id === code)?.hasCategory ?? false
 
 /** ¿Algún registro vivo usa este código? Si sí, la entrada solo se puede desactivar, no borrar. */
 export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements'>, kind: CatalogKind, id: string): boolean {

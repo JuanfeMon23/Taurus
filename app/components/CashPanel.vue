@@ -2,7 +2,7 @@
 import { ArrowLeftRight, Banknote, HandCoins, Lock, LockOpen, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
 import type { CashDay, DayRecord, DepositMovement } from '../services/types'
 import { cashSummary, closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
-import { defaultMethodId, entryName, EXPENSE_MOVEMENT_TYPE, methodAffectsCash, movementSign } from '../utils/catalogs'
+import { defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory } from '../utils/catalogs'
 import { toUserMessage } from '../utils/errors'
 import { money } from '../utils/format'
 import { movementIcon, signTone } from '../utils/icons'
@@ -33,7 +33,7 @@ const movementError = ref<string | null>(null)
 const { show } = useToast()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
-const isExpense = computed(() => newMovement.type === EXPENSE_MOVEMENT_TYPE)
+const isExpense = computed(() => movementTypeHasCategory(catalogs.value.movementTypes, newMovement.type))
 const typeIndex = computed(() => Math.max(0, activeMovementTypes.value.findIndex(type => type.id === newMovement.type)))
 const methodIndex = computed(() => Math.max(0, activeMethods.value.findIndex(method => method.id === newMovement.method)))
 const typeLabel = (typeId: string) => entryName(catalogs.value.movementTypes, typeId)

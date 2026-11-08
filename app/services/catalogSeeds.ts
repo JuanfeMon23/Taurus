@@ -11,9 +11,9 @@ export const SEED_CATALOGS: Pick<Snapshot, 'paymentMethods' | 'movementTypes' | 
     { id: 'transfer', name: 'Transferencia', affectsCash: false, sortOrder: 1, active: true, updatedAt: EPOCH },
   ],
   movementTypes: [
-    { id: 'expense', name: 'Gasto', sign: -1, sortOrder: 0, active: true, updatedAt: EPOCH },
-    { id: 'withdrawal', name: 'Retiro', sign: -1, sortOrder: 1, active: true, updatedAt: EPOCH },
-    { id: 'deposit', name: 'Aporte', sign: 1, sortOrder: 2, active: true, updatedAt: EPOCH },
+    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, sortOrder: 0, active: true, updatedAt: EPOCH },
+    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, sortOrder: 1, active: true, updatedAt: EPOCH },
+    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, sortOrder: 2, active: true, updatedAt: EPOCH },
   ],
   fundMovementTypes: [
     { id: 'transfer', name: 'Envío', sign: 1, sortOrder: 0, active: true, updatedAt: EPOCH },

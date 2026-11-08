@@ -650,3 +650,17 @@ async def test_catalogos_signo_invalido_422(client: AsyncClient) -> None:
             response = await put(client, {collection: [catalog_item(sign=sign)]})
             assert response.status_code == 422
             assert "El signo debe ser 1 o -1" in response.text
+
+
+async def test_tipo_de_movimiento_has_category_se_guarda_y_se_lee(client: AsyncClient) -> None:
+    await put(client, {"movementTypes": [catalog_item(sign=-1, hasCategory=True)]})
+    stored = {rec["id"]: rec for rec in await get_col(client, "movementTypes")}["tst-item"]
+    assert stored["hasCategory"] is True
+
+
+async def test_tipo_de_movimiento_has_category_ausente_o_nulo_es_false(client: AsyncClient) -> None:
+    await put(client, {"movementTypes": [catalog_item(id="tst-sin", sign=-1)]})
+    await put(client, {"movementTypes": [catalog_item(id="tst-nulo", sign=-1, hasCategory=None)]})
+    stored = {rec["id"]: rec for rec in await get_col(client, "movementTypes")}
+    assert stored["tst-sin"]["hasCategory"] is False
+    assert stored["tst-nulo"]["hasCategory"] is False

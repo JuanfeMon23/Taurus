@@ -1,11 +1,11 @@
-import type { CashDay, DayRecord, DepositMovement, PaymentMethod, SignedEntry } from '../services/types'
+import type { CashDay, DayRecord, DepositMovement, MovementTypeEntry, PaymentMethod } from '../services/types'
 import { defaultMethodId, methodAffectsCash, movementSign } from './catalogs'
 import { tripTotal } from './trip'
 
 /** Catálogos que necesita el cálculo de caja. */
 export interface CashCatalogs {
   paymentMethods: PaymentMethod[]
-  movementTypes: SignedEntry[]
+  movementTypes: MovementTypeEntry[]
 }
 
 export interface CashSummary {

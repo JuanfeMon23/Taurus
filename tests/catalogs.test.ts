@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activeEntries, catalogEntryInUse, defaultMethodId, entryName, methodAffectsCash, movementSign, slugifyCode, sortCatalog } from '../app/utils/catalogs'
+import { activeEntries, catalogEntryInUse, defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, slugifyCode, sortCatalog } from '../app/utils/catalogs'
 import { emptySnapshot } from '../app/services/types'
 import { testCatalogs } from './fixtures/catalogs'
 
@@ -55,6 +55,19 @@ describe('reglas con catálogo', () => {
     expect(movementSign(movementTypes, 'deposit')).toBe(1)
     expect(movementSign(movementTypes, 'expense')).toBe(-1)
     expect(movementSign(movementTypes, 'desconocido')).toBe(0)
+  })
+})
+
+describe('movementTypeHasCategory', () => {
+  const { movementTypes } = testCatalogs()
+  it('es la marca hasCategory del tipo y false si el código no está en el catálogo', () => {
+    expect(movementTypeHasCategory(movementTypes, 'expense')).toBe(true)
+    expect(movementTypeHasCategory(movementTypes, 'deposit')).toBe(false)
+    expect(movementTypeHasCategory(movementTypes, 'desconocido')).toBe(false)
+  })
+  it('otro tipo con hasCategory también lleva categoría', () => {
+    const custom = movementTypes.map(type => (type.id === 'withdrawal' ? { ...type, hasCategory: true } : type))
+    expect(movementTypeHasCategory(custom, 'withdrawal')).toBe(true)
   })
 })
 

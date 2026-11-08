@@ -3,7 +3,7 @@ import { ChartColumn, CircleDollarSign, Clock, Gauge, Hourglass, Percent, Receip
 import type { DayRecord } from '../services/types'
 import { clockNow, withShiftOnlyDays } from '../utils/shifts'
 import { buildActivityRows, buildCostSeries, buildIncomeSeries, type ActivityDay } from '../utils/chartSeries'
-import { entryName, EXPENSE_MOVEMENT_TYPE } from '../utils/catalogs'
+import { entryName, movementTypeHasCategory } from '../utils/catalogs'
 import { dayActivity, periodActivity } from '../utils/activity'
 import { toUserMessage } from '../utils/errors'
 import { money, todayISO } from '../utils/format'
@@ -30,10 +30,10 @@ async function load() {
     await refreshCatalogs()
     // Los días con turnos y sin viajes cuentan (100 % tiempo muerto); sus montos son 0.
     days.value = withShiftOnlyDays(await taurus.repo.listDays(), (await taurus.snapshot()).shifts.filter(shift => !shift.deleted))
-    // Gastos varios = movimientos de caja de tipo gasto, con cualquier medio de pago.
+    // Gastos varios = movimientos de caja cuyo tipo lleva categoría, con cualquier medio de pago.
     expenses.value = (await taurus.repo.listCash()).flatMap(cashDay =>
       cashDay.movements
-        .filter(movement => movement.type === EXPENSE_MOVEMENT_TYPE)
+        .filter(movement => movementTypeHasCategory(catalogs.value.movementTypes, movement.type))
         .map(movement => ({ date: cashDay.date, amount: movement.amount, categoryId: movement.categoryId, method: movement.method })))
     loadError.value = null
   } catch (error) {

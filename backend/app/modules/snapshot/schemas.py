@@ -237,6 +237,10 @@ class SignedCatalogRec(CatalogRec):
     sign: Sign
 
 
+class MovementTypeRec(SignedCatalogRec):
+    has_category: Annotated[bool, _none_to_default(False)] = False
+
+
 class SnapshotWrite(CamelModel):
     """Snapshot parcial: cualquier subconjunto de colecciones."""
 
@@ -251,7 +255,7 @@ class SnapshotWrite(CamelModel):
     shifts: list[ShiftRec] = []
     shift_templates: list[ShiftTemplateRec] = []
     payment_methods: list[PaymentMethodRec] = []
-    movement_types: list[SignedCatalogRec] = []
+    movement_types: list[MovementTypeRec] = []
     fund_movement_types: list[SignedCatalogRec] = []
     expense_categories: list[CatalogRec] = []
 

@@ -23,7 +23,8 @@ class PaymentMethod(CatalogMixin, Base):
 
 
 class MovementType(CatalogMixin, Base):
-    """Tipo de movimiento de caja (`movements.type`); sign = efecto sobre el efectivo."""
+    """Tipo de movimiento de caja (`movements.type`); sign = efecto sobre el efectivo;
+    has_category = el movimiento admite categoría de gasto."""
 
     __tablename__ = "movement_types"
     __table_args__ = (
@@ -32,6 +33,7 @@ class MovementType(CatalogMixin, Base):
     )
 
     sign: Mapped[int] = mapped_column(SmallInteger)
+    has_category: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
 
 
 class FundMovementType(CatalogMixin, Base):

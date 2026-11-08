@@ -127,11 +127,16 @@ export interface SignedEntry extends CatalogEntry {
   sign: 1 | -1
 }
 
+/** Tipo de movimiento de caja; `hasCategory` = el movimiento pide categoría de gasto y alimenta «Gastos varios». */
+export interface MovementTypeEntry extends SignedEntry {
+  hasCategory: boolean
+}
+
 export type ExpenseCategory = CatalogEntry
 
 export interface Catalogs {
   paymentMethods: PaymentMethod[]
-  movementTypes: SignedEntry[]
+  movementTypes: MovementTypeEntry[]
   fundMovementTypes: SignedEntry[]
   expenseCategories: ExpenseCategory[]
 }
@@ -141,7 +146,7 @@ export type CatalogKind = keyof Catalogs
 export const emptyCatalogs = (): Catalogs => ({ paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [] })
 
 export type PaymentMethodRec = PaymentMethod & Meta
-export type MovementTypeRec = SignedEntry & Meta
+export type MovementTypeRec = MovementTypeEntry & Meta
 export type FundMovementTypeRec = SignedEntry & Meta
 export type ExpenseCategoryRec = ExpenseCategory & Meta
 

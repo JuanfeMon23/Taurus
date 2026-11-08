@@ -230,3 +230,43 @@ async def test_0008_backfills_category_and_roundtrips(
         alembic("upgrade", "head")
         await engine.dispose()
     assert "category_id" in await _columns(test_url, "movements")
+
+
+async def test_0009_has_category_default_backfill_and_roundtrip(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.connect() as conn:
+            flags = {
+                r.id: r.has_category
+                for r in await conn.execute(text("select id, has_category from movement_types"))
+            }
+        assert flags["expense"] is True
+        assert [k for k, v in flags.items() if v] == ["expense"]
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into movement_types (id, name, sign, deleted) "
+                    "values ('t9', 'Prueba', 1, false)"
+                )
+            )
+        async with engine.connect() as conn:
+            default = (
+                await conn.execute(text("select has_category from movement_types where id='t9'"))
+            ).scalar_one()
+        assert default is False
+        alembic("downgrade", "0008")
+        assert "has_category" not in await _columns(test_url, "movement_types")
+        alembic("upgrade", "0009")
+        async with engine.connect() as conn:
+            again = {
+                r.id: r.has_category
+                for r in await conn.execute(text("select id, has_category from movement_types"))
+            }
+        assert again["expense"] is True and again["t9"] is False
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from movement_types where id = 't9'"))
+        alembic("upgrade", "head")
+        await engine.dispose()
