@@ -1,7 +1,12 @@
-@import "tailwindcss";
+/* Tailwind y Nuxt UI solo para Estadísticas. Se omite el reset global (preflight) de Tailwind para que el resto de la app
+   conserve su aspecto: su equivalente vive en `ui-scope.css` y solo rige dentro de `.ui-scope` (Estadísticas y los overlays de Nuxt UI). */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
 @import "@nuxt/ui";
+@import "./ui-scope.css" layer(base);
 
-/* El CSS propio vive en la capa `components`: gana al reset de Tailwind y pierde ante las utilidades de Nuxt UI. */
+/* El CSS propio vive en la capa `components`: gana al reset de `ui-scope` y pierde ante las utilidades de Nuxt UI. */
 @layer components {
 /* ───────── Tokens ───────── */
 :root {
@@ -176,6 +181,10 @@ input, select { font: inherit; color: inherit; }
 .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .badge.open { background: var(--pos-soft); color: var(--pos); }
 .badge.closed { background: var(--surface-3); color: var(--muted); }
+.badge.pos { background: var(--pos-soft); color: var(--pos); }
+.badge.info { background: var(--info-soft); color: var(--info); }
+.badge.warn { background: var(--accent-soft); color: var(--accent); }
+.badge.outline { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--text-2); }
 
 .seg { position: relative; display: flex; padding: 4px; background: var(--surface-2); border-radius: 14px; }
 .seg > button { position: relative; z-index: 1; flex: 1; padding: 9px; border-radius: 10px; color: var(--muted); font-weight: 600; transition: color 0.2s; }

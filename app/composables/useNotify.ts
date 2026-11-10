@@ -1,17 +1,18 @@
-import { useToast as useUiToast } from '@nuxt/ui/composables/useToast'
+export interface ToastMsg {
+  id: number
+  text: string
+  kind: 'ok' | 'error'
+}
 
-export type ToastKind = 'ok' | 'error'
+const toasts = ref<ToastMsg[]>([])
+let seq = 0
 
-/** Avisos de la app (`show(texto, tipo)`) sobre el sistema de toasts de Nuxt UI. */
+/** Avisos de la app (`show(texto, tipo)`) sobre el toaster propio de app.vue. Se llama `useNotify` para no chocar con el `useToast` que Nuxt UI auto-importa. */
 export function useNotify() {
-  const toast = useUiToast()
-  function show(text: string, kind: ToastKind = 'ok', ms = 2200) {
-    toast.add({
-      title: text,
-      color: kind === 'ok' ? 'success' : 'error',
-      icon: kind === 'ok' ? 'i-lucide-circle-check' : 'i-lucide-circle-alert',
-      duration: kind === 'ok' ? ms : Math.max(ms, 4000),
-    })
+  function show(text: string, kind: ToastMsg['kind'] = 'ok', ms = 2200) {
+    const id = ++seq
+    toasts.value.push({ id, text, kind })
+    setTimeout(() => (toasts.value = toasts.value.filter(toast => toast.id !== id)), ms)
   }
-  return { show }
+  return { toasts, show }
 }

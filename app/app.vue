@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, CalendarDays, History as HistoryIcon, Moon, PiggyBank, SlidersHorizontal, Sun, Wallet } from 'lucide-vue-next'
+import { BarChart3, CalendarDays, CircleCheck, CircleAlert, History as HistoryIcon, Moon, PiggyBank, SlidersHorizontal, Sun, Wallet } from 'lucide-vue-next'
 import AppSidebar from './components/AppSidebar.vue'
 import Cash from './components/Cash.vue'
 import Funds from './components/Funds.vue'
@@ -25,13 +25,15 @@ watch(collapsed, isCollapsed => localStorage.setItem(SIDEBAR_KEY, isCollapsed ? 
 const select = (key: string) => { index.value = Math.max(0, tabs.findIndex(tab => tab.key === key)) }
 const current = computed(() => tabs[index.value]!)
 const { theme, toggle } = useTheme()
+const { toasts } = useNotify()
 
 const rawDate = new Intl.DateTimeFormat('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())
 const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
 </script>
 
 <template>
-  <UApp :toaster="{ position: 'top-center' }">
+  <!-- Nuxt UI solo para Estadísticas: sin toaster propio (los avisos usan el de abajo) y overlays dentro de `.ui-scope`. -->
+  <UApp :toaster="null" portal="#ui-portal">
   <div class="app desktop" :style="{ '--sidebar-w': collapsed ? '72px' : '232px' }">
     <AppSidebar v-model:collapsed="collapsed" :items="tabs" :active="current.key" @select="select" />
     <NuxtPwaManifest />
@@ -54,11 +56,19 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
     <main :class="{ wide: current.key === 'hoy' }">
       <Transition name="page" mode="out-in">
         <KeepAlive>
-          <component :is="current.view" :key="current.key" />
+          <component :is="current.view" :key="current.key" :class="{ 'ui-scope': current.key === 'stats' }" />
         </KeepAlive>
       </Transition>
     </main>
 
+    <TransitionGroup name="toast" tag="div" class="toasts">
+      <div v-for="toast in toasts" :key="toast.id" class="toast" :class="toast.kind">
+        <CircleCheck v-if="toast.kind === 'ok'" :size="18" />
+        <CircleAlert v-else :size="18" />
+        {{ toast.text }}
+      </div>
+    </TransitionGroup>
+    <div id="ui-portal" class="ui-scope" />
   </div>
   </UApp>
 </template>
@@ -80,5 +90,17 @@ main { position: relative; }
 .spin-enter-active, .spin-leave-active { transition: transform 0.25s var(--ease), opacity 0.2s; }
 .spin-enter-from { transform: rotate(-90deg) scale(0.6); opacity: 0; }
 .spin-leave-to { transform: rotate(90deg) scale(0.6); opacity: 0; }
+
+.toasts { position: fixed; z-index: 30; left: 0; right: 0; top: calc(env(safe-area-inset-top) + 12px); display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+.toast {
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 16px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--border);
+  box-shadow: var(--shadow); font-weight: 600;
+}
+.toast.ok svg { color: var(--pos); }
+.toast.error svg { color: var(--neg); }
+.toast-enter-active, .toast-leave-active { transition: all 0.35s var(--ease); }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(-16px) scale(0.95); }
 
 </style>

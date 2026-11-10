@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeftRight, HandCoins, Lock, LockOpen, Plus, Trash2, Vault, Wallet } from 'lucide-vue-next'
+import { ArrowLeftRight, Banknote, HandCoins, Lock, LockOpen, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
 import type { CashDay, DayRecord, DepositMovement } from '../services/types'
 import { cashSummary, closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
 import { defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory } from '../utils/catalogs'
@@ -66,11 +66,6 @@ const summaryLines = computed<SummaryLine[]>(() => {
   lines.push({ key: 'balance', label: 'Saldo del depósito', tone: '', amount: balance.value, separated: true })
   return lines
 })
-// Al abrir un modal, el foco va al primer campo (como hacía BaseModal) en vez de al botón de cerrar.
-function focusFirstField(event: Event) {
-  event.preventDefault()
-  ;(event.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>('input')?.focus()
-}
 const isOpen = computed(() => !!cash.value && !cash.value.closedAt)
 const balance = computed(() => depositBalance(allCash.value, outflows.value))
 // Cierre en curso: la base es lo contado o, sin conteo, el esperado.
@@ -183,43 +178,40 @@ const removeMovement = (id: string) =>
 <template>
   <section class="stack">
     <!-- Hoy (compacto): una sola tarjeta con estado, efectivo esperado y acción principal -->
-    <UCard v-if="compact" :ui="{ body: 'p-4 sm:p-4' }">
-      <div class="flex items-center justify-between gap-2">
-        <h2 class="cash-title"><UIcon name="i-lucide-wallet" class="size-4" /> Caja</h2>
-        <UBadge v-if="cash" :color="isOpen ? 'success' : 'neutral'" variant="subtle" :icon="isOpen ? 'i-lucide-lock-open' : 'i-lucide-lock'">{{ isOpen ? 'Abierta' : 'Cerrada' }}</UBadge>
-        <UBadge v-else color="neutral" variant="subtle">Sin abrir</UBadge>
+    <div v-if="compact" class="card stack compact-card">
+      <div class="row between">
+        <span class="title cash-title"><Wallet :size="16" /> Caja</span>
+        <span v-if="cash" class="badge" :class="isOpen ? 'open' : 'closed'"><component :is="isOpen ? LockOpen : Lock" :size="13" /> {{ isOpen ? 'Abierta' : 'Cerrada' }}</span>
+        <span v-else class="badge closed">Sin abrir</span>
       </div>
       <template v-if="!cash">
-        <p class="mt-2 text-sm text-muted">Registra el efectivo con el que empiezas el día.</p>
-        <UButton class="mt-3" block icon="i-lucide-lock-open" @click="showOpen = true">Abrir caja</UButton>
+        <p class="small muted">Registra el efectivo con el que empiezas el día.</p>
+        <button type="button" class="btn primary full" @click="showOpen = true"><LockOpen :size="18" /> Abrir caja</button>
       </template>
       <template v-else>
-        <div class="mt-1 flex items-end justify-between gap-3">
+        <div class="row between cash-head">
           <div>
-            <p class="text-xs text-muted">Efectivo esperado</p>
-            <p class="cash-total num"><AnimatedNumber :value="summary.expected" /></p>
+            <p class="small muted">Efectivo esperado</p>
+            <p class="cash-total"><AnimatedNumber :value="summary.expected" /></p>
           </div>
-          <UButton v-if="isOpen" icon="i-lucide-lock" @click="showClose = true">Cerrar caja</UButton>
-          <UButton v-else color="neutral" variant="outline" icon="i-lucide-lock-open" @click="showReopen = true">Reabrir caja</UButton>
+          <button v-if="isOpen" type="button" class="btn primary" @click="showClose = true"><Lock :size="18" /> Cerrar caja</button>
+          <button v-else type="button" class="btn" @click="showReopen = true"><LockOpen :size="18" /> Reabrir caja</button>
         </div>
-        <dl class="cash-lines">
+        <div class="cash-lines">
           <div v-for="line in summaryLines" :key="line.key" :class="{ sep: line.separated }">
-            <dt :class="line.tone">{{ line.label }}</dt>
-            <dd class="num">{{ money(line.amount) }}</dd>
+            <span :class="line.tone">{{ line.label }}</span><b class="num">{{ money(line.amount) }}</b>
           </div>
-          <div v-if="!isOpen && summary.counted !== undefined">
-            <dt>Contado</dt><dd class="num">{{ money(summary.counted) }}</dd>
-          </div>
+          <div v-if="!isOpen && summary.counted !== undefined"><span>Contado</span><b class="num">{{ money(summary.counted) }}</b></div>
           <div v-if="!isOpen && summary.difference !== undefined">
-            <dt :class="summary.difference < 0 ? 'neg' : 'pos'">{{ summary.difference < 0 ? 'Faltante' : summary.difference > 0 ? 'Sobrante' : 'Cuadra' }}</dt>
-            <dd class="num" :class="summary.difference < 0 ? 'neg' : 'pos'">{{ money(Math.abs(summary.difference)) }}</dd>
+            <span :class="summary.difference < 0 ? 'neg' : 'pos'">{{ summary.difference < 0 ? 'Faltante' : summary.difference > 0 ? 'Sobrante' : 'Cuadra' }}</span>
+            <b class="num" :class="summary.difference < 0 ? 'neg' : 'pos'">{{ money(Math.abs(summary.difference)) }}</b>
           </div>
-        </dl>
-        <p v-for="income in offCashIncome" :key="income.id" class="mt-2 flex items-center gap-1.5 text-xs font-semibold text-info">
-          <UIcon name="i-lucide-arrow-left-right" class="size-4 shrink-0" /> {{ money(income.amount) }} por {{ income.name.toLowerCase() }} (no entran a caja)
-        </p>
+        </div>
+        <div v-for="income in offCashIncome" :key="income.id" class="note">
+          <ArrowLeftRight :size="16" /> {{ money(income.amount) }} por {{ income.name.toLowerCase() }} (no entran a caja)
+        </div>
       </template>
-    </UCard>
+    </div>
 
     <!-- Caja completa (página Caja) -->
     <div v-else-if="!cash" class="card stack">
@@ -306,48 +298,58 @@ const removeMovement = (id: string) =>
     </div>
 
     <!-- Apertura -->
-    <UModal v-model:open="showOpen" title="Abrir caja" :content="{ onOpenAutoFocus: focusFirstField }">
-      <template #body>
-        <form class="flex flex-col gap-3" @submit.prevent="open">
-          <UFormField label="Efectivo de apertura" :help="opening && !openingTouched ? 'Sugerido: lo que quedó en caja en el último cierre.' : undefined">
-            <UInput v-model.nullable="opening" type="number" inputmode="decimal" placeholder="0" icon="i-lucide-banknote" class="w-full" @input="openingTouched = true" />
-          </UFormField>
-          <UButton type="submit" block icon="i-lucide-lock-open">Confirmar apertura</UButton>
-        </form>
-      </template>
-    </UModal>
+    <BaseModal :open="showOpen" title="Abrir caja" @close="showOpen = false">
+      <form class="stack" @submit.prevent="open">
+        <label class="field">
+          <span>Efectivo de apertura</span>
+          <div class="input-icon">
+            <Banknote :size="18" />
+            <input v-model.number="opening" type="number" inputmode="decimal" placeholder="0" class="input" @input="openingTouched = true">
+          </div>
+        </label>
+        <p v-if="opening && !openingTouched" class="small muted">Sugerido: lo que quedó en caja en el último cierre.</p>
+        <button type="submit" class="btn primary full"><LockOpen :size="18" /> Confirmar apertura</button>
+      </form>
+    </BaseModal>
 
     <!-- Cierre -->
-    <UModal v-model:open="showClose" title="Cerrar caja" :content="{ onOpenAutoFocus: focusFirstField }">
-      <template #body>
-        <form class="flex flex-col gap-3" @submit.prevent="close">
-          <div class="lines">
-            <div><span>Efectivo esperado</span><b class="num">{{ money(summary.expected) }}</b></div>
-            <div v-for="line in summaryLines.slice(0, -1)" :key="line.key"><span :class="line.tone">{{ line.label }}</span><b class="num">{{ money(line.amount) }}</b></div>
+    <BaseModal :open="showClose" title="Cerrar caja" @close="showClose = false">
+      <form class="stack" @submit.prevent="close">
+        <div class="lines">
+          <div><span>Efectivo esperado</span><b class="num">{{ money(summary.expected) }}</b></div>
+          <div><span>Apertura</span><b class="num">{{ money(summary.opening) }}</b></div>
+          <div><span class="pos">+ Servicios ({{ cashMethodNames }})</span><b class="num">{{ money(summary.cashIncome) }}</b></div>
+          <div v-for="line in movementLines" :key="line.id"><span :class="line.sign > 0 ? 'pos' : line.sign < 0 ? 'neg' : ''">{{ line.sign > 0 ? '+' : line.sign < 0 ? '−' : '·' }} {{ line.name }}</span><b class="num">{{ money(line.amount) }}</b></div>
+        </div>
+        <label class="field">
+          <span>Contado (opcional)</span>
+          <div class="input-icon">
+            <Scale :size="18" />
+            <input v-model.number="counted" type="number" inputmode="decimal" placeholder="0" class="input">
           </div>
-          <UFormField label="Contado (opcional)">
-            <UInput v-model.nullable="counted" type="number" inputmode="decimal" placeholder="0" icon="i-lucide-scale" class="w-full" />
-          </UFormField>
-          <UFormField label="Va al depósito" :error="closeError ?? undefined">
-            <UInput v-model.nullable="toDeposit" type="number" inputmode="decimal" min="0" placeholder="0" icon="i-lucide-vault" class="w-full" />
-          </UFormField>
-          <div class="lines">
-            <div><span>Queda en caja</span><b class="num" :class="{ neg: kept < 0 }">{{ money(kept) }}</b></div>
+        </label>
+        <label class="field">
+          <span>Va al depósito</span>
+          <div class="input-icon">
+            <Vault :size="18" />
+            <input v-model.number="toDeposit" type="number" inputmode="decimal" min="0" placeholder="0" class="input" :aria-invalid="!!closeError">
           </div>
-          <UButton type="submit" block icon="i-lucide-lock" :disabled="!!closeError">Confirmar cierre</UButton>
-        </form>
-      </template>
-    </UModal>
+        </label>
+        <div class="lines">
+          <div><span>Queda en caja</span><b class="num" :class="{ neg: kept < 0 }">{{ money(kept) }}</b></div>
+        </div>
+        <p v-if="closeError" class="err" role="alert">{{ closeError }}</p>
+        <button type="submit" class="btn primary full" :disabled="!!closeError"><Lock :size="18" /> Confirmar cierre</button>
+      </form>
+    </BaseModal>
 
     <!-- Reabrir -->
-    <UModal v-model:open="showReopen" title="Reabrir caja">
-      <template #body>
-        <div class="flex flex-col gap-3">
-          <p class="text-sm">Se borrará lo contado y lo enviado al depósito en el cierre ({{ money(cash?.toDeposit ?? 0) }}). Tendrás que cerrar la caja de nuevo.</p>
-          <UButton type="button" block icon="i-lucide-lock-open" @click="reopen">Confirmar reapertura</UButton>
-        </div>
-      </template>
-    </UModal>
+    <BaseModal :open="showReopen" title="Reabrir caja" @close="showReopen = false">
+      <div class="stack">
+        <p class="small">Se borrará lo contado y lo enviado al depósito en el cierre ({{ money(cash?.toDeposit ?? 0) }}). Tendrás que cerrar la caja de nuevo.</p>
+        <button type="button" class="btn primary full" @click="reopen"><LockOpen :size="18" /> Confirmar reapertura</button>
+      </div>
+    </BaseModal>
 
     <BaseModal v-if="!compact" :open="showMovement" title="Nuevo movimiento" @close="showMovement = false">
       <form class="stack" @submit.prevent="addMovement">
@@ -390,12 +392,14 @@ const removeMovement = (id: string) =>
 </template>
 
 <style scoped>
-.cash-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.compact-card { padding: 12px; gap: 10px; }
+.cash-title { display: inline-flex; align-items: center; gap: 6px; }
+.cash-head { align-items: flex-end; }
+.cash-head p { margin: 0; }
 .cash-total { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
-.cash-lines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px; margin: 10px 0 0; font-size: 13px; }
+.cash-lines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px; font-size: 13px; }
 .cash-lines > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text-2); }
-.cash-lines dt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cash-lines dt, .cash-lines dd { margin: 0; }
+.cash-lines > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cash-lines > .sep { grid-column: 1 / -1; padding-top: 4px; border-top: 1px solid var(--border); }
 .rel { position: relative; }
 .big { width: 64px; height: 64px; border-radius: 20px; }

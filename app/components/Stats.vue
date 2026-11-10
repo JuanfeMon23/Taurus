@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ChartColumn, CircleDollarSign, Clock, Gauge, Hourglass, Percent, Receipt, Route, Timer, TrendingUp, Wallet, Sunrise } from 'lucide-vue-next'
-import type { DayRecord } from '../services/types'
+import type { DayRecord, ShiftTemplate } from '../services/types'
 import { clockNow, withShiftOnlyDays } from '../utils/shifts'
+import { ALL_SHIFTS_KEY, buildShiftBreakdown, dropStaleOpenShifts, filterDaysByShift, shiftFilterOptions, type ShiftBreakdownRow } from '../utils/shiftStats'
 import { buildActivityRows, buildCostSeries, buildIncomeSeries, type ActivityDay } from '../utils/chartSeries'
 import { entryName, movementTypeHasCategory } from '../utils/catalogs'
 import { dayActivity, periodActivity } from '../utils/activity'
@@ -16,10 +17,13 @@ const ActivityTimeline = defineAsyncComponent(() => import('./charts/ActivityTim
 const CostsChart = defineAsyncComponent(() => import('./charts/CostsChart.vue'))
 const HourlyActivityChart = defineAsyncComponent(() => import('./charts/HourlyActivityChart.vue'))
 const IncomeChart = defineAsyncComponent(() => import('./charts/IncomeChart.vue'))
+const ShiftCompareChart = defineAsyncComponent(() => import('./charts/ShiftCompareChart.vue'))
 
 // Gráficas (ECharts, componentes en ./charts): income ← chartSeries; costs ← costSeries; activity ← activityRows + hourlyMinutes.
 const days = ref<DayRecord[]>([])
 const expenses = ref<StatsExpense[]>([])
+const templates = ref<ShiftTemplate[]>([])
+const shiftFilter = ref(ALL_SHIFTS_KEY)
 const granularity = ref<Granularity>('day')
 const loadError = ref<string | null>(null)
 const { catalogs, defaultMethod, refreshCatalogs } = useCatalogs()
@@ -28,6 +32,7 @@ async function load() {
   try {
     const taurus = await useTaurus()
     await refreshCatalogs()
+    templates.value = await taurus.repo.listShiftTemplates({ includeInactive: true })
     // Los días con turnos y sin viajes cuentan (100 % tiempo muerto); sus montos son 0.
     days.value = withShiftOnlyDays(await taurus.repo.listDays(), (await taurus.snapshot()).shifts.filter(shift => !shift.deleted))
     // Gastos varios = movimientos de caja cuyo tipo lleva categoría, con cualquier medio de pago.
@@ -47,22 +52,37 @@ const MODES = [['day', 'Día'], ['week', 'Semana'], ['month', 'Mes'], ['year', '
 const LIMIT: Record<Granularity, number> = { day: 30, week: 12, month: 12, year: 10 }
 
 const statsOptions = computed(() => ({ defaultMethodId: defaultMethod.value }))
-const buckets = computed(() => aggregate(days.value, granularity.value, expenses.value, statsOptions.value).slice(-LIMIT[granularity.value]))
-const periodKeys = computed(() => new Set(buckets.value.map(bucket => bucket.key)))
-const inPeriod = (date: string) => periodKeys.value.has(bucketKey(date, granularity.value))
-const periodDays = computed(() => days.value.filter(day => inPeriod(day.date)))
-const periodSummary = computed(() => summarize(periodDays.value, expenses.value.filter(expense => inPeriod(expense.date)), statsOptions.value))
-
 // Un turno en curso solo cuenta (hasta la hora actual) en el día de hoy; en días pasados se ignora.
-const activityDays = computed<ActivityDay[]>(() => {
-  const today = todayISO()
-  return periodDays.value.map(day => ({ ...day, shifts: day.date === today ? day.shifts : (day.shifts ?? []).filter(shift => shift.endTime) }))
-})
+const allDays = computed(() => dropStaleOpenShifts(days.value, todayISO()))
+const filterOptions = computed(() => shiftFilterOptions(allDays.value, templates.value))
+const filterItems = computed(() => filterOptions.value.map(option => ({ label: option.name, value: option.key })))
+// Si el turno elegido ya no tiene datos, el filtro vuelve a «Todos».
+const activeFilter = computed(() => (filterOptions.value.some(option => option.key === shiftFilter.value) ? shiftFilter.value : ALL_SHIFTS_KEY))
+const isFiltered = computed(() => activeFilter.value !== ALL_SHIFTS_KEY)
+// El periodo (qué buckets entran) se define con todos los datos, para que el filtro no corra la ventana.
+const periodBuckets = computed(() => aggregate(allDays.value, granularity.value, expenses.value, statsOptions.value).slice(-LIMIT[granularity.value]))
+const periodKeys = computed(() => new Set(periodBuckets.value.map(bucket => bucket.key)))
+const inPeriod = (date: string) => periodKeys.value.has(bucketKey(date, granularity.value))
+const periodDaysAll = computed(() => allDays.value.filter(day => inPeriod(day.date)))
+// Con un turno elegido solo cuentan sus viajes y horas; km extra y gastos varios de caja quedan fuera (ver `filterDaysByShift`).
+const periodDays = computed(() => filterDaysByShift(periodDaysAll.value, templates.value, activeFilter.value))
+const buckets = computed(() => (isFiltered.value ? aggregate(periodDays.value, granularity.value, [], statsOptions.value) : periodBuckets.value))
+const periodSummary = computed(() => summarize(periodDays.value, isFiltered.value ? [] : expenses.value.filter(expense => inPeriod(expense.date)), statsOptions.value))
+
+const activityDays = periodDays
 const activity = computed(() => {
   const currentTime = clockNow()
   const perDay = activityDays.value.map(day => dayActivity(day.services, day.shifts ?? [], currentTime))
   return { ...periodActivity(perDay), longestGap: perDay.reduce((longest, day) => Math.max(longest, day.longestGap), 0) }
 })
+const shiftRows = computed<ShiftBreakdownRow[]>(() => buildShiftBreakdown(periodDaysAll.value, templates.value, clockNow()))
+const shiftColumns = [
+  { accessorKey: 'name', header: 'Turno' }, { accessorKey: 'trips', header: 'Viajes' }, { accessorKey: 'gross', header: 'Bruto' },
+  { accessorKey: 'net', header: 'Neto' }, { accessorKey: 'km', header: 'Km' }, { accessorKey: 'shiftMinutes', header: 'Horas de turno' },
+  { accessorKey: 'netPerShiftHour', header: 'Neto/hora de turno' }, { accessorKey: 'utilization', header: '% aprovechamiento' },
+]
+const netPerHourItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.netPerShiftHour })))
+const netTotalItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.net })))
 const hourlyMinutes = computed(() => activity.value.hourlyActivity)
 const hourlyShiftMinutes = computed(() => activity.value.hourlyShiftMinutes)
 const hourLabel = (hour: number) => `${String(hour).padStart(2, '0')}:00`
@@ -90,7 +110,8 @@ const activityRows = computed(() => buildActivityRows(activityDays.value, granul
 const netPerKm = (bucket: { net: number; km: number }) => (bucket.km ? bucket.net / bucket.km : 0)
 const tableRows = computed(() => [...buckets.value].reverse())
 
-const summaryCards = computed(() => [
+const summaryCards = computed(() => allSummaryCards.value.filter(card => !(isFiltered.value && (card.key === 'expenses' || card.key === 'netAfterExpenses'))))
+const allSummaryCards = computed(() => [
   { key: 'gross', label: 'Bruto', value: money(periodSummary.value.gross), icon: Wallet, tone: 'info' },
   { key: 'commission', label: 'Comisión inDrive + IVA', value: money(periodSummary.value.commission), icon: Receipt, tone: 'neg' },
   { key: 'costs', label: 'Costos', value: money(periodSummary.value.totalCost), icon: CircleDollarSign, tone: 'neg' },
@@ -125,10 +146,18 @@ const activityIndicators = computed(() => [
 
 <template>
   <section class="stack">
+    <div class="toolbar">
     <div class="seg modes" :style="{ '--n': 4, '--i': MODES.findIndex(mode => mode[0] === granularity) }" role="group" aria-label="Agrupar por">
       <span class="thumb" />
       <button v-for="[modeKey, modeLabel] in MODES" :key="modeKey" type="button" :class="{ active: granularity === modeKey }" @click="granularity = modeKey">{{ modeLabel }}</button>
     </div>
+      <UFormField v-if="days.length" label="Turno" class="shift-filter">
+        <USelect v-model="shiftFilter" :items="filterItems" value-key="value" label-key="label" class="w-full" aria-label="Filtrar estadísticas por turno" data-filter="shift" />
+      </UFormField>
+    </div>
+    <UAlert v-if="isFiltered" color="info" variant="subtle" icon="i-lucide-filter" data-notice="shift-filter"
+      title="Solo cuentan los viajes y las horas de este turno"
+      description="El km extra del día y los gastos varios de caja no se reparten entre turnos, así que no se incluyen aquí. Los costos por km se calculan con los km de los viajes del turno." />
 
     <p v-if="loadError" class="err" role="alert">{{ loadError }}</p>
 
@@ -173,6 +202,38 @@ const activityIndicators = computed(() => [
             </div>
           </div>
 
+          <div class="card stack" data-card="shift-breakdown">
+            <span class="title">Desglose por turno</span>
+            <p class="muted small">Por turno habitual del periodo, sin importar el filtro. Neto por hora = neto / horas de turno. Los viajes sin turno y los turnos sueltos van en filas aparte.</p>
+            <UTable v-if="shiftRows.length" :data="shiftRows" :columns="shiftColumns" class="shift-table" :ui="{ th: 'text-right first:text-left', td: 'text-right first:text-left tabular-nums whitespace-nowrap' }">
+              <template #gross-cell="{ row }">{{ money(row.original.gross) }}</template>
+              <template #net-cell="{ row }"><span :class="row.original.net < 0 ? 'neg' : ''">{{ money(row.original.net) }}</span></template>
+              <template #km-cell="{ row }">{{ Math.round(row.original.km) }}</template>
+              <template #shiftMinutes-cell="{ row }">{{ row.original.shiftMinutes > 0 ? duration(row.original.shiftMinutes) : '—' }}</template>
+              <template #netPerShiftHour-cell="{ row }">
+                <span v-if="row.original.netPerShiftHour === null">—</span>
+                <span v-else :class="row.original.netPerShiftHour < 0 ? 'neg' : ''">{{ money(row.original.netPerShiftHour) }}</span>
+              </template>
+              <template #utilization-cell="{ row }">{{ row.original.utilization === null ? '—' : percent(row.original.utilization) }}</template>
+            </UTable>
+            <p v-else class="muted small">Aún no hay viajes ni turnos en este periodo.</p>
+          </div>
+
+          <div class="charts">
+            <div class="card chart-card">
+              <span class="title">Neto por hora de turno</span>
+              <div data-chart="shift-hourly" class="chart" role="img" aria-label="Neto por hora de turno, comparado entre turnos">
+                <ShiftCompareChart :items="netPerHourItems" metric-label="Neto por hora de turno" unit="/h" />
+              </div>
+            </div>
+            <div class="card chart-card">
+              <span class="title">Neto total por turno</span>
+              <div data-chart="shift-net" class="chart" role="img" aria-label="Neto total del periodo, comparado entre turnos">
+                <ShiftCompareChart :items="netTotalItems" metric-label="Neto total" />
+              </div>
+            </div>
+          </div>
+
           <div v-if="expensesByCategory.length" class="card stack" data-card="expenses-by-category">
             <span class="title">Gastos varios por categoría</span>
             <div class="category-list">
@@ -186,16 +247,16 @@ const activityIndicators = computed(() => [
               <table>
                 <thead>
                   <tr>
-                    <th>Periodo</th><th>Bruto</th><th>Comisión</th><th>Costos</th><th>Gastos varios</th><th>Neto</th>
-                    <th>Neto tras gastos</th><th>Neto/km</th><th v-for="series in chartSeries.income" :key="series.id">{{ series.name }}</th>
+                    <th>Periodo</th><th>Bruto</th><th>Comisión</th><th>Costos</th><th v-if="!isFiltered">Gastos varios</th><th>Neto</th>
+                    <th v-if="!isFiltered">Neto tras gastos</th><th>Neto/km</th><th v-for="series in chartSeries.income" :key="series.id">{{ series.name }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="bucket in tableRows" :key="bucket.key">
                     <td>{{ bucket.key }}</td><td>{{ money(bucket.gross) }}</td><td>{{ money(bucket.commission) }}</td>
-                    <td>{{ money(bucket.totalCost) }}</td><td>{{ money(bucket.expenses) }}</td>
+                    <td>{{ money(bucket.totalCost) }}</td><td v-if="!isFiltered">{{ money(bucket.expenses) }}</td>
                     <td :class="bucket.net < 0 ? 'neg' : ''">{{ money(bucket.net) }}</td>
-                    <td :class="bucket.netAfterExpenses < 0 ? 'neg' : ''">{{ money(bucket.netAfterExpenses) }}</td>
+                    <td v-if="!isFiltered" :class="bucket.netAfterExpenses < 0 ? 'neg' : ''">{{ money(bucket.netAfterExpenses) }}</td>
                     <td>{{ money(netPerKm(bucket)) }}</td><td v-for="series in chartSeries.income" :key="series.id">{{ money(bucket.incomeByMethod.get(series.id) ?? 0) }}</td>
                   </tr>
                 </tbody>
@@ -226,7 +287,10 @@ const activityIndicators = computed(() => [
 </template>
 
 <style scoped>
-.modes { max-width: 420px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
+.modes { width: 420px; max-width: 100%; }
+.shift-filter { width: 280px; max-width: 100%; }
+.neg { color: var(--neg); }
 .err { color: var(--neg); font-size: 13px; font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
 .tile { display: flex; flex-direction: column; gap: 4px; padding: 14px; }
@@ -235,8 +299,8 @@ const activityIndicators = computed(() => [
 .block { display: block; }
 .layout { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: start; }
 @media (min-width: 1400px) { .layout { grid-template-columns: minmax(0, 1fr) 340px; } .side-col { position: sticky; top: 24px; } }
-.charts { display: grid; grid-template-columns: 1fr; gap: 16px; }
-@media (min-width: 1000px) { .charts { grid-template-columns: 1fr 1fr; } }
+.charts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 1000px) { .charts { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 .chart-card { display: flex; flex-direction: column; gap: 10px; }
 .chart { min-width: 0; }
 .indicators { display: flex; flex-direction: column; gap: 10px; }

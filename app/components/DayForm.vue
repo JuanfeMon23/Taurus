@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CalendarDays, Check, Gift, Layers, MapPin, NotebookPen, Pencil, Route, Trash2, TrendingDown, TrendingUp, X } from 'lucide-vue-next'
 import { computeDay, type Category } from '../utils/calc'
 import { dayKm, dayTotals, extraKmFrom, removeTrip, sortTrips, tripSummary, upsertTrip } from '../utils/dayTrips'
 import { computeCommission, DEFAULT_RATES, type CommissionRates } from '../utils/commission'
@@ -8,6 +9,7 @@ import { GENERIC_ERROR, toUserMessage } from '../utils/errors'
 import { categoryIcon, methodIcon } from '../utils/icons'
 import { formatDuration, sumDistance, tripMinutes, tripTotal, validateTrip, type TripErrors } from '../utils/trip'
 import { dayActivity } from '../utils/activity'
+import { sortShiftsForDisplay } from '../utils/shiftStats'
 import { activeShiftTemplates, activityNow, buildShiftFromTemplate, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, shiftForTemplate, chipRangeLabel, shiftRemovalBlock, tripsOfShift, clockNow } from '../utils/shifts'
 import type { Service, Shift, ShiftTemplate } from '../services/types'
 
@@ -48,7 +50,7 @@ const saving = ref(false)
 const cashKey = ref(0) // se incrementa al cambiar los viajes para recargar la caja
 const attempted = ref(false)
 const confirming = ref<string | null>(null)
-const firstField = ref<{ inputRef: HTMLInputElement | null } | null>(null)
+const firstField = ref<HTMLInputElement | null>(null)
 const { show } = useNotify()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
@@ -58,7 +60,7 @@ function resetForm() {
   shiftTouched.value = false
   form.value = blank()
   attempted.value = false
-  nextTick(() => firstField.value?.inputRef?.focus())
+  nextTick(() => firstField.value?.focus())
 }
 
 async function load() {
@@ -115,10 +117,12 @@ const shiftChips = computed<ShiftChip[]>(() => {
     return { key: template.id, name: template.name, range: shift ? shiftRange(shift) : `${template.startTime}–${template.endTime}`, shift, template }
   })
   const activeIds = new Set(activeTemplates.map(template => template.id))
-  const others = shifts.value.filter(shift => !shift.templateId || !activeIds.has(shift.templateId))
+  const others = sortShiftsForDisplay(shifts.value.filter(shift => !shift.templateId || !activeIds.has(shift.templateId)), templates.value)
     .map((shift): ShiftChip => ({ key: shift.id, name: shiftName(shift), range: shiftRange(shift), shift }))
   return [...fromTemplates, ...others]
 })
+// Turnos del día en el orden de la barra (el del formulario de viaje usa el mismo).
+const orderedShifts = computed(() => sortShiftsForDisplay(shifts.value, templates.value))
 const shiftNameById = (shiftId?: string) => {
   const shift = shiftId ? shifts.value.find(candidate => candidate.id === shiftId) : undefined
   return shift ? `${shiftName(shift)} ${shiftRange(shift)}` : ''
@@ -178,7 +182,7 @@ const totals = computed(() => dayTotals(trips.value, totalKm.value, categories.v
 const result = computed(() => computeDay({ services: trips.value.map(tripTotal), km: totalKm.value, categories: categories.value, rateModes: catalogs.value.rateModes }))
 const costShare = (amount: number) => (result.value.totalCost > 0 ? Math.max((amount / result.value.totalCost) * 100, 4) : 0)
 const margin = computed(() => (totals.value.gross > 0 ? Math.round((totals.value.net / totals.value.gross) * 100) : 0))
-const methodTone = (methodId?: string) => (methodAffectsCash(catalogs.value.paymentMethods, methodId ?? defaultMethod.value) ? 'success' : 'info')
+const methodTone = (methodId?: string) => (methodAffectsCash(catalogs.value.paymentMethods, methodId ?? defaultMethod.value) ? 'pos' : 'info')
 
 const tripKm = computed(() => sumDistance(trips.value))
 const duration = computed(() => formatDuration(tripMinutes(form.value.startTime, form.value.endTime)))
@@ -250,7 +254,7 @@ function edit(trip: Service) {
     shiftId: trip.shiftId && shiftChoiceValid(trip.shiftId) ? trip.shiftId : '',
   }
   attempted.value = false
-  nextTick(() => firstField.value?.inputRef?.focus())
+  nextTick(() => firstField.value?.focus())
 }
 
 async function removeOne(trip: Service) {
@@ -286,186 +290,221 @@ async function saveMeta() {
 <template>
   <section class="day rise">
     <!-- Barra del día: fecha, km extra, nota y turnos -->
-    <div class="day-bar">
-      <UFormField label="Fecha" class="w-44">
-        <UInput v-model="date" type="date" icon="i-lucide-calendar-days" class="w-full" />
-      </UFormField>
-      <UFormField label="Km extra (fuera de viajes)" class="w-56">
-        <UInput v-model.nullable="extraKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" icon="i-lucide-route" class="w-full" @change="saveMeta" />
-      </UFormField>
-      <UFormField label="Nota" class="w-56">
-        <UInput v-model="note" type="text" placeholder="Opcional" icon="i-lucide-notebook-pen" class="w-full" @change="saveMeta" />
-      </UFormField>
-      <UFormField label="Turnos del día" class="min-w-0 flex-1">
-        <div v-if="shiftChips.length" class="flex flex-wrap gap-1.5" role="group" aria-label="Turnos del día">
-          <UButton v-for="chip in shiftChips" :key="chip.key" size="sm" :color="chip.shift ? 'primary' : 'neutral'" :variant="chip.shift ? 'subtle' : 'outline'"
-            :icon="chip.shift ? 'i-lucide-check' : 'i-lucide-plus'" :title="`${chip.name} ${chip.range}`" :aria-pressed="!!chip.shift" :disabled="shiftBusy"
-            :data-template="chip.template?.id" :data-shift="chip.shift?.id" @click="toggleShiftChip(chip)">
-            <b>{{ chip.name }}</b> <span v-if="chipRange(chip.name, chip.range)" class="num font-normal">{{ chipRange(chip.name, chip.range) }}</span>
-          </UButton>
+    <div class="card day-bar">
+      <label class="field bar-date">
+        <span>Fecha</span>
+        <div class="input-icon">
+          <CalendarDays :size="18" />
+          <input v-model="date" type="date" class="input">
         </div>
-        <p v-else class="text-sm text-muted">Registra tus turnos habituales en Tarifas para marcarlos aquí con un toque.</p>
-      </UFormField>
+      </label>
+      <label class="field bar-km">
+        <span>Km extra (fuera de viajes)</span>
+        <div class="input-icon">
+          <Route :size="18" />
+          <input v-model.number="extraKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" @change="saveMeta">
+        </div>
+      </label>
+      <label class="field bar-note">
+        <span>Nota</span>
+        <div class="input-icon">
+          <NotebookPen :size="18" />
+          <input v-model="note" type="text" placeholder="Opcional" class="input" @change="saveMeta">
+        </div>
+      </label>
+      <div class="field bar-shifts">
+        <span>Turnos del día</span>
+        <div v-if="shiftChips.length" class="shift-chips" role="group" aria-label="Turnos del día">
+          <button v-for="chip in shiftChips" :key="chip.key" type="button" class="chip shift-chip" :class="{ on: !!chip.shift }" :title="`${chip.name} ${chip.range}`"
+            :aria-pressed="!!chip.shift" :disabled="shiftBusy" :data-template="chip.template?.id" :data-shift="chip.shift?.id" @click="toggleShiftChip(chip)">
+            <b>{{ chip.name }}</b> <span v-if="chipRange(chip.name, chip.range)" class="num">{{ chipRange(chip.name, chip.range) }}</span>
+          </button>
+        </div>
+        <p v-else class="muted small">Registra tus turnos habituales en Tarifas para marcarlos aquí con un toque.</p>
+      </div>
     </div>
 
     <div class="day-grid">
       <!-- Formulario de viaje -->
-      <UCard as="form" class="day-form" :ui="{ body: 'p-4 sm:p-4' }" novalidate @submit.prevent="saveTrip">
-        <div class="flex flex-col gap-3">
-          <div class="flex items-center justify-between gap-2">
-            <h2 class="panel-title">{{ form.id ? 'Editar viaje' : 'Nuevo viaje' }}</h2>
-            <UButton v-if="form.id" type="button" size="xs" color="neutral" variant="ghost" icon="i-lucide-x" @click="resetForm">Cancelar edición</UButton>
-          </div>
-
-          <UFormField label="Turno" required :error="shifts.length ? showErr('shiftId') : undefined">
-            <div v-if="shifts.length" class="flex flex-wrap gap-1.5" role="group" aria-label="Turno del viaje">
-              <UButton v-for="shift in shifts" :key="shift.id" type="button" size="sm" :color="form.shiftId === shift.id ? 'primary' : 'neutral'" :variant="form.shiftId === shift.id ? 'solid' : 'outline'"
-                :title="`${shiftName(shift)} ${shiftRange(shift)}`" :aria-pressed="form.shiftId === shift.id" :data-trip-shift="shift.id" @click="pickShift(shift.id)">
-                <b>{{ shiftName(shift) }}</b> <span v-if="chipRange(shiftName(shift), shiftRange(shift))" class="num font-normal">{{ chipRange(shiftName(shift), shiftRange(shift)) }}</span>
-              </UButton>
-            </div>
-            <UAlert v-else color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="Marca un turno del día arriba para registrar viajes" role="status" />
-          </UFormField>
-
-          <div class="grid grid-cols-3 gap-2">
-            <UFormField label="Recogida" required :error="showErr('startTime')">
-              <UInput ref="firstField" v-model="form.startTime" type="time" class="w-full" />
-            </UFormField>
-            <UFormField label="Llegada" required :error="showErr('endTime')" :hint="duration || undefined">
-              <UInput v-model="form.endTime" type="time" class="w-full" />
-            </UFormField>
-            <UFormField label="Distancia (km)" required :error="showErr('distanceKm')">
-              <UInput v-model.nullable="form.distanceKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="w-full" />
-            </UFormField>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <UFormField label="Dinero" required :error="showErr('amount')">
-              <UInput v-model.nullable="form.amount" type="number" inputmode="decimal" min="0" step="any" placeholder="Monto" class="w-full">
-                <template #leading>
-                  <component :is="methodIcon(form.method, methodAffectsCash(catalogs.paymentMethods, form.method))" :size="16" class="text-dimmed" />
-                </template>
-              </UInput>
-            </UFormField>
-            <UFormField label="Bonus / propina (opcional)" :error="showErr('bonus')">
-              <UInput v-model.nullable="form.bonus" type="number" inputmode="decimal" min="0" step="any" placeholder="0" icon="i-lucide-gift" class="w-full" />
-            </UFormField>
-          </div>
-
-          <div class="grid grid-cols-2 items-start gap-2">
-            <UFormField label="Medio de pago">
-              <UFieldGroup role="group" aria-label="Medio de pago">
-                <UButton v-for="method in methodChoices" :key="method.id" type="button" size="sm" :color="form.method === method.id ? methodTone(method.id) : 'neutral'" :variant="form.method === method.id ? 'subtle' : 'outline'"
-                  :aria-pressed="form.method === method.id" :data-method="method.id" @click="form.method = method.id">
-                  {{ method.name }}
-                </UButton>
-              </UFieldGroup>
-            </UFormField>
-            <UCheckbox v-model="form.isIndrive" label="Viaje inDrive" :description="commissionText" class="num pt-5" aria-live="polite" />
-          </div>
-
-          <div class="grid grid-cols-2 gap-2">
-            <UFormField label="Origen (opcional)">
-              <UInput v-model="form.origin" type="text" placeholder="Origen" icon="i-lucide-map-pin" class="w-full" />
-            </UFormField>
-            <UFormField label="Destino (opcional)">
-              <UInput v-model="form.destination" type="text" placeholder="Destino" icon="i-lucide-map-pin" class="w-full" />
-            </UFormField>
-          </div>
-
-          <UButton type="submit" block size="lg" icon="i-lucide-check" :loading="saving" :disabled="saving || !shifts.length">
-            {{ form.id ? 'Guardar cambios' : 'Guardar viaje' }}
-          </UButton>
+      <form class="card stack day-form" novalidate @submit.prevent="saveTrip">
+        <div class="row between">
+          <span class="title">{{ form.id ? 'Editar viaje' : 'Nuevo viaje' }}</span>
+          <button v-if="form.id" type="button" class="btn ghost small-btn" @click="resetForm"><X :size="16" /> Cancelar edición</button>
         </div>
-      </UCard>
+
+        <div class="field">
+          <span>Turno</span>
+          <div v-if="shifts.length" class="shift-chips" role="group" aria-label="Turno del viaje">
+            <button v-for="shift in orderedShifts" :key="shift.id" type="button" class="chip shift-chip" :class="{ on: form.shiftId === shift.id }" :title="`${shiftName(shift)} ${shiftRange(shift)}`"
+              :aria-pressed="form.shiftId === shift.id" :data-trip-shift="shift.id" @click="pickShift(shift.id)">
+              <b>{{ shiftName(shift) }}</b> <span v-if="chipRange(shiftName(shift), shiftRange(shift))" class="num">{{ chipRange(shiftName(shift), shiftRange(shift)) }}</span>
+            </button>
+          </div>
+          <p v-else class="warn small" role="status">Marca un turno del día arriba para registrar viajes</p>
+          <small v-if="showErr('shiftId') && shifts.length" class="err" role="alert">{{ showErr('shiftId') }}</small>
+        </div>
+
+        <div class="grid3">
+          <label class="field">
+            <span>Recogida</span>
+            <input ref="firstField" v-model="form.startTime" type="time" class="input" :aria-invalid="!!showErr('startTime')">
+            <small v-if="showErr('startTime')" class="err" role="alert">{{ showErr('startTime') }}</small>
+          </label>
+          <label class="field">
+            <span>Llegada <em v-if="duration" class="hint num">{{ duration }}</em></span>
+            <input v-model="form.endTime" type="time" class="input" :aria-invalid="!!showErr('endTime')">
+            <small v-if="showErr('endTime')" class="err" role="alert">{{ showErr('endTime') }}</small>
+          </label>
+          <label class="field">
+            <span>Distancia (km)</span>
+            <input v-model.number="form.distanceKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('distanceKm')">
+            <small v-if="showErr('distanceKm')" class="err" role="alert">{{ showErr('distanceKm') }}</small>
+          </label>
+        </div>
+
+        <div class="grid2">
+          <label class="field">
+            <span>Dinero</span>
+            <div class="input-icon">
+              <component :is="methodIcon(form.method, methodAffectsCash(catalogs.paymentMethods, form.method))" :size="18" />
+              <input v-model.number="form.amount" type="number" inputmode="decimal" min="0" step="any" placeholder="Monto" class="input" :aria-invalid="!!showErr('amount')">
+            </div>
+            <small v-if="showErr('amount')" class="err" role="alert">{{ showErr('amount') }}</small>
+          </label>
+          <label class="field">
+            <span>Bonus / propina (opcional)</span>
+            <div class="input-icon">
+              <Gift :size="18" />
+              <input v-model.number="form.bonus" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('bonus')">
+            </div>
+            <small v-if="showErr('bonus')" class="err" role="alert">{{ showErr('bonus') }}</small>
+          </label>
+        </div>
+
+        <div class="grid2 pay-row">
+          <div class="field">
+            <span>Medio de pago</span>
+            <div class="methods" role="group" aria-label="Medio de pago">
+              <button v-for="method in methodChoices" :key="method.id" type="button" class="chip method" :class="method.affectsCash ? 'pos' : 'info'"
+                :aria-pressed="form.method === method.id" :data-method="method.id" @click="form.method = method.id">
+                {{ method.name }}
+              </button>
+            </div>
+          </div>
+          <div class="commission-col">
+            <label class="check">
+              <input v-model="form.isIndrive" type="checkbox">
+              <span>Viaje inDrive</span>
+            </label>
+            <p class="muted small num" aria-live="polite">{{ commissionText }}</p>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <label class="field">
+            <span>Origen (opcional)</span>
+            <div class="input-icon">
+              <MapPin :size="18" />
+              <input v-model="form.origin" type="text" class="input" placeholder="Origen">
+            </div>
+          </label>
+          <label class="field">
+            <span>Destino (opcional)</span>
+            <div class="input-icon">
+              <MapPin :size="18" />
+              <input v-model="form.destination" type="text" class="input" placeholder="Destino">
+            </div>
+          </label>
+        </div>
+
+        <button type="submit" class="btn primary full big" :disabled="saving || !shifts.length">
+          <Check :size="20" /> {{ form.id ? 'Guardar cambios' : 'Guardar viaje' }}
+        </button>
+      </form>
 
       <!-- Resumen del día y caja -->
-      <div class="flex min-w-0 flex-col gap-3">
-        <UCard :ui="{ body: 'p-4 sm:p-4' }">
-          <div class="flex items-center justify-between gap-2">
-            <span class="panel-title flex items-center gap-1.5">
-              <UIcon :name="totals.net >= 0 ? 'i-lucide-trending-up' : 'i-lucide-trending-down'" class="size-4" /> Neto del día
-            </span>
-            <UBadge v-if="totals.gross > 0" :color="totals.net >= 0 ? 'success' : 'neutral'" variant="subtle">{{ margin }}% de margen</UBadge>
+      <div class="stack">
+        <div class="hero card">
+          <div class="row between">
+            <span class="hero-label"><component :is="totals.net >= 0 ? TrendingUp : TrendingDown" :size="16" /> Neto del día</span>
+            <span v-if="totals.gross > 0" class="badge" :class="totals.net >= 0 ? 'open' : 'closed'">{{ margin }}% de margen</span>
           </div>
-          <p class="net num" :class="totals.net < 0 ? 'text-error' : 'text-success'"><AnimatedNumber :value="totals.net" /></p>
-          <dl class="stats">
-            <div><dt>Viajes</dt><dd class="num">{{ totals.count }}</dd></div>
-            <div><dt>Km</dt><dd class="num" :title="`Km del día = viajes ${tripKm} + extra ${extraKm ?? 0}`">{{ totals.km }}<span v-if="extraKm" class="extra"> (+{{ extraKm }} extra)</span></dd></div>
-            <div><dt>Bruto</dt><dd><AnimatedNumber :value="totals.gross" /></dd></div>
-            <div v-if="totals.bonus > 0"><dt>Bonus</dt><dd><AnimatedNumber :value="totals.bonus" /></dd></div>
-            <div><dt>Costos</dt><dd><AnimatedNumber :value="totals.totalCost" /></dd></div>
-            <div v-if="totals.commission + totals.commissionVat > 0"><dt>Comisión inDrive</dt><dd><AnimatedNumber :value="totals.commission + totals.commissionVat" /></dd></div>
-          </dl>
+          <p class="hero-value" :class="totals.net < 0 ? 'neg' : ''"><AnimatedNumber :value="totals.net" /></p>
+          <div class="hero-meta">
+            <div><span>Viajes</span><b class="num">{{ totals.count }}</b></div>
+            <div><span>Km</span><b class="num" :title="`Km del día = viajes ${tripKm} + extra ${extraKm ?? 0}`">{{ totals.km }}<small v-if="extraKm" class="extra"> (+{{ extraKm }} extra)</small></b></div>
+            <div><span>Bruto</span><b><AnimatedNumber :value="totals.gross" /></b></div>
+            <div v-if="totals.bonus > 0"><span>Bonus</span><b><AnimatedNumber :value="totals.bonus" /></b></div>
+            <div><span>Costos</span><b><AnimatedNumber :value="totals.totalCost" /></b></div>
+            <div v-if="totals.commission + totals.commissionVat > 0"><span>Comisión inDrive</span><b><AnimatedNumber :value="totals.commission + totals.commissionVat" /></b></div>
+          </div>
 
-          <USeparator class="my-3" />
+          <hr class="divider costs-divider">
 
-          <h2 class="panel-title mb-2">Apartar para costos</h2>
-          <ul class="flex flex-col gap-2.5">
-            <li v-for="costLine in result.costs" :key="costLine.categoryId">
-              <div class="flex items-center gap-2.5">
-                <span class="icon-tile info !size-8 !rounded-lg"><component :is="categoryIcon(costLine.name)" :size="16" /></span>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-baseline justify-between gap-2">
-                    <span class="truncate text-sm font-semibold text-highlighted">{{ costLine.name }} <span class="font-normal text-muted">· {{ rate(costLine.rate) }}</span></span>
-                    <span class="num text-sm font-bold text-highlighted">− {{ money(costLine.amount) }}</span>
-                  </div>
-                  <UProgress :model-value="costShare(costLine.amount)" size="xs" class="mt-1.5" aria-hidden="true" />
+          <div class="stack costs">
+            <span class="title">Apartar para costos</span>
+            <div v-for="costLine in result.costs" :key="costLine.categoryId" class="cost">
+              <div class="row">
+                <span class="icon-tile info"><component :is="categoryIcon(costLine.name)" :size="16" /></span>
+                <div class="grow">
+                  <div class="row between"><b class="small">{{ costLine.name }} <span class="muted rate-text">· {{ rate(costLine.rate) }}</span></b><b class="num small">− {{ money(costLine.amount) }}</b></div>
                 </div>
               </div>
-            </li>
-          </ul>
-          <p v-if="!result.costs.length" class="text-sm text-muted">No hay categorías de costo activas.</p>
-        </UCard>
+              <div class="bar"><i :style="{ width: costShare(costLine.amount) + '%' }" /></div>
+            </div>
+            <p v-if="!result.costs.length" class="muted small">No hay categorías de costo activas.</p>
+          </div>
+        </div>
 
         <CashPanel :date="date" :refresh-key="cashKey" compact />
       </div>
 
       <!-- Viajes del día -->
       <div class="trips-col">
-        <UCard class="trips-card" :ui="{ root: 'flex flex-col overflow-hidden', body: 'flex min-h-0 flex-1 flex-col gap-2 p-4 sm:p-4' }">
-          <div class="flex items-center justify-between gap-2">
-            <h2 class="panel-title">Viajes del día</h2>
-            <UBadge v-if="sorted.length" color="neutral" variant="subtle" class="num">{{ sorted.length }}</UBadge>
+        <div class="card stack trips-card">
+          <div class="row between">
+            <span class="title">Viajes del día</span>
+            <span v-if="sorted.length" class="badge closed num">{{ sorted.length }}</span>
           </div>
-          <UAlert v-if="tripsWithoutShift" color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="Hay viajes de este día sin turno; asígnales uno" role="status" />
-          <div v-if="!sorted.length" class="empty-trips">
-            <UIcon name="i-lucide-route" class="size-7 opacity-60" />
-            <p>Aún no hay viajes en este día.</p>
+          <p v-if="tripsWithoutShift" class="warn small" role="status">Hay viajes de este día sin turno; asígnales uno</p>
+          <div v-if="!sorted.length" class="empty compact">
+            <Route :size="28" />
+            <p class="small">Aún no hay viajes en este día.</p>
           </div>
           <TransitionGroup v-else name="list" tag="ul" class="trip-list">
             <li v-for="(trip, index) in sorted" :key="trip.id ?? index" class="trip" :class="{ active: form.id && form.id === trip.id }">
-              <div class="min-w-0 flex-1">
-                <div class="flex items-baseline justify-between gap-2">
-                  <span class="text-sm font-semibold text-highlighted">
+              <div class="grow">
+                <div class="row between">
+                  <b class="small">
                     <template v-if="tripSummary(trip).schedule">{{ tripSummary(trip).schedule }}</template>
                     <template v-else>Servicio</template>
-                    <span v-if="tripSummary(trip).duration" class="whitespace-nowrap font-normal text-muted"> · {{ tripSummary(trip).duration }}</span>
-                  </span>
-                  <span class="num whitespace-nowrap font-bold text-highlighted">{{ money(trip.amount) }}</span>
+                    <span v-if="tripSummary(trip).duration" class="muted dur"> · {{ tripSummary(trip).duration }}</span>
+                  </b>
+                  <b class="num">{{ money(trip.amount) }}</b>
                 </div>
-                <div class="mt-1 flex flex-wrap items-center gap-1 text-xs text-muted">
+                <div class="tags small muted">
                   <span v-if="trip.distanceKm !== undefined" class="num">{{ trip.distanceKm }} km</span>
-                  <UBadge :color="methodTone(trip.method)" variant="subtle" size="sm">{{ entryName(catalogs.paymentMethods, trip.method ?? defaultMethod) }}</UBadge>
-                  <UBadge v-if="shiftNameById(trip.shiftId)" color="neutral" variant="outline" size="sm" icon="i-lucide-layers">{{ shiftNameById(trip.shiftId) }}</UBadge>
-                  <UBadge v-else color="warning" variant="subtle" size="sm" icon="i-lucide-triangle-alert">Sin turno</UBadge>
-                  <UBadge v-if="trip.id && outOfShiftIds.has(trip.id)" color="info" variant="subtle" size="sm">Fuera de turno</UBadge>
+                  <span class="badge" :class="methodTone(trip.method)">{{ entryName(catalogs.paymentMethods, trip.method ?? defaultMethod) }}</span>
+                  <span v-if="shiftNameById(trip.shiftId)" class="badge outline"><Layers :size="12" /> {{ shiftNameById(trip.shiftId) }}</span>
+                  <span v-else class="badge warn"><Layers :size="12" /> Sin turno</span>
+                  <span v-if="trip.id && outOfShiftIds.has(trip.id)" class="badge info">Fuera de turno</span>
                   <span v-if="trip.isIndrive === false">Propio</span>
                 </div>
-                <p v-if="(trip.bonus ?? 0) > 0 || (trip.isIndrive !== false && (trip.commission ?? 0) > 0) || tripSummary(trip).route" class="num mt-1 text-xs text-muted">
+                <p v-if="(trip.bonus ?? 0) > 0 || (trip.isIndrive !== false && (trip.commission ?? 0) > 0) || tripSummary(trip).route" class="muted small num detail">
                   <template v-if="(trip.bonus ?? 0) > 0">+ {{ money(trip.bonus!) }} bonus</template>
                   <template v-if="trip.isIndrive !== false && (trip.commission ?? 0) > 0">{{ (trip.bonus ?? 0) > 0 ? ' · ' : '' }}Comisión {{ money(trip.commission!) }} + IVA {{ money(trip.commissionVat ?? 0) }}</template>
                   <template v-if="tripSummary(trip).route">{{ (trip.bonus ?? 0) > 0 || (trip.isIndrive !== false && (trip.commission ?? 0) > 0) ? ' · ' : '' }}{{ tripSummary(trip).route }}</template>
                 </p>
               </div>
-              <div class="flex shrink-0 flex-col">
-                <UButton type="button" size="xs" color="neutral" variant="ghost" icon="i-lucide-pencil" aria-label="Editar viaje" @click="edit(trip)" />
-                <UButton type="button" size="xs" :color="confirming === trip.id ? 'error' : 'neutral'" :variant="confirming === trip.id ? 'subtle' : 'ghost'" icon="i-lucide-trash-2"
-                  :aria-label="confirming === trip.id ? 'Confirmar eliminación' : 'Eliminar viaje'" @click="removeOne(trip)" />
+              <div class="trip-actions">
+                <button type="button" class="btn icon ghost" aria-label="Editar viaje" @click="edit(trip)"><Pencil :size="16" /></button>
+                <button type="button" class="btn icon ghost" :class="{ danger: confirming === trip.id }" :aria-label="confirming === trip.id ? 'Confirmar eliminación' : 'Eliminar viaje'" @click="removeOne(trip)">
+                  <Trash2 :size="16" />
+                </button>
               </div>
             </li>
           </TransitionGroup>
-        </UCard>
+        </div>
       </div>
     </div>
   </section>
@@ -473,8 +512,11 @@ async function saveMeta() {
 
 <style scoped>
 .day { display: flex; flex-direction: column; gap: 12px; }
-/* Barra del día: una sola franja, sin tarjeta de formulario. */
-.day-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 10px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--surface) 70%, transparent); }
+/* Barra del día: fecha, km extra, nota y turnos en una sola tarjeta. */
+.day-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; }
+.bar-date { width: 176px; }
+.bar-km, .bar-note { width: 224px; }
+.bar-shifts { flex: 1 1 260px; min-width: 0; }
 .day-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 @media (min-width: 1000px) { .day-grid { grid-template-columns: minmax(380px, 5fr) minmax(0, 6fr); } }
 /* En 3 columnas la lista de viajes ocupa exactamente la altura de la fila (la dan formulario y resumen) y hace scroll dentro. */
@@ -483,17 +525,67 @@ async function saveMeta() {
   .trips-col { position: relative; min-height: 320px; }
   .trips-card { position: absolute; inset: 0; }
 }
-.trips-card { max-height: 70vh; }
+.trips-card { display: flex; flex-direction: column; max-height: 70vh; overflow: hidden; }
 @media (min-width: 1400px) { .trips-card { max-height: none; } }
-.panel-title { font-size: 13px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-.net { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; margin: 6px 0 12px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 6px 12px; margin: 0; }
-.stats > div { display: flex; flex-direction: column; min-width: 0; }
-.stats dt { font-size: 12px; color: var(--muted); }
-.stats dd .extra { font-size: 11px; font-weight: 500; color: var(--muted); }
-.stats dd { margin: 0; font-size: 15px; font-weight: 700; color: var(--text); }
-.trip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-.trip { display: flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 6px 8px 12px; border: 1px solid transparent; transition: border-color 0.2s; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 600px) { .grid3, .grid2 { grid-template-columns: 1fr; } .bar-date, .bar-km, .bar-note { width: 100%; } }
+/* Condensado: menos relleno vertical para que Hoy quepa sin scroll en escritorio. */
+.day .card { padding: 12px; }
+.day .day-bar { padding: 10px 14px 12px; }
+.day .stack { gap: 10px; }
+.day .day-form { gap: 9px; }
+.day .field { gap: 4px; }
+.day .input { padding: 8px 12px; }
+.day .input-icon > .input { padding-left: 38px; }
+.day .input-icon > svg { left: 11px; }
+.day .field > span { font-size: 12px; }
+.hint { font-style: normal; font-weight: 600; color: var(--accent); margin-left: 4px; }
+.pay-row { align-items: start; }
+.commission-col { display: flex; flex-direction: column; gap: 2px; padding-top: 20px; }
+.commission-col p { margin: 0 0 0 28px; }
+.warn { color: var(--accent); font-weight: 600; margin: 0; }
+.methods { display: flex; flex-wrap: wrap; gap: 6px; }
+.method { justify-content: center; }
+.method[aria-pressed='false'] { opacity: 0.45; }
+.check { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+.small-btn { padding: 6px 10px; font-size: 13px; }
+.err { color: var(--neg); font-size: 12px; font-weight: 600; }
+.input[aria-invalid='true'] { border-color: var(--neg); }
+.shift-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.shift-chip { padding: 6px 10px; background: var(--surface-2); color: var(--text-2); border: 1.5px solid transparent; }
+.shift-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.shift-chip:disabled { opacity: 0.5; pointer-events: none; }
+.hero { background: linear-gradient(145deg, var(--surface) 0%, var(--surface-2) 100%); position: relative; overflow: hidden; }
+.hero::before {
+  content: ''; position: absolute; width: 240px; height: 240px; right: -70px; top: -90px;
+  background: radial-gradient(circle, var(--accent-soft), transparent 70%);
+}
+.hero-label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-weight: 600; font-size: 14px; }
+.hero-value { font-size: 44px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; margin: 4px 0 10px; color: var(--pos); position: relative; }
+.hero-value.neg { color: var(--neg); }
+.hero-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; position: relative; }
+.hero-meta > div { background: var(--surface-2); border-radius: 14px; padding: 8px 12px; display: flex; flex-direction: column; }
+.hero-meta span { font-size: 12px; color: var(--muted); font-weight: 500; }
+.hero-meta b { font-size: 15px; }
+.hero-meta .extra { font-size: 11px; font-weight: 500; color: var(--muted); }
+.costs-divider { margin: 12px 0 10px; position: relative; }
+.costs { position: relative; gap: 8px; }
+.rate-text { font-weight: 500; }
+.cost .icon-tile { width: 32px; height: 32px; border-radius: 10px; }
+.cost .bar { height: 6px; border-radius: 99px; background: var(--surface-2); margin-top: 6px; overflow: hidden; }
+.cost .bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width 0.6s var(--ease); }
+.big { padding: 11px; font-size: 16px; border-radius: 14px; }
+.btn:disabled { opacity: 0.6; pointer-events: none; }
+.trip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; position: relative; flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.trip { display: flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: 14px; padding: 8px 6px 8px 14px; border: 1px solid transparent; transition: border-color 0.2s; }
 .trip.active { border-color: var(--accent); }
-.empty-trips { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 28px 12px; color: var(--muted); font-size: 14px; text-align: center; }
+.trip .num, .trip .dur { white-space: nowrap; }
+.tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 3px; }
+.tags .badge { padding: 2px 8px; font-size: 11px; }
+.detail { margin: 3px 0 0; }
+.trip-actions { display: flex; flex-direction: column; flex-shrink: 0; }
+.trip-actions .btn.icon { padding: 6px; border-radius: 10px; }
+.empty.compact { padding: 24px 12px; }
 </style>
