@@ -1,11 +1,17 @@
 from typing import Any
 
+import pytest
 from httpx import AsyncClient
+
+from app.modules.snapshot import controller
 
 URL = "/api/v1/snapshot"
 T1 = "2026-11-04T10:00:00Z"
 T2 = "2026-11-04T11:00:00Z"
 T_FUTURE = "2099-01-01T00:00:00Z"  # la semilla de settings tiene updated_at = fecha de migración
+
+
+DEFAULT_SHIFT_ID = "sh1"  # todo viaje vivo exige turno (CHECK ck_services_shift_required)
 
 
 def svc(**overrides: Any) -> dict[str, Any]:
@@ -14,6 +20,7 @@ def svc(**overrides: Any) -> dict[str, Any]:
         "date": "2026-11-04",
         "amount": 12.5,
         "method": "cash",
+        "shiftId": DEFAULT_SHIFT_ID,
         "updatedAt": T1,
         **overrides,
     }
@@ -24,6 +31,12 @@ def trip(**overrides: Any) -> dict[str, Any]:
 
 
 async def put(client: AsyncClient, body: dict[str, Any]) -> Any:
+    """PUT del snapshot; si trae viajes del turno por defecto sin turnos, agrega ese turno."""
+    uses_default_shift = any(
+        record.get("shiftId") == DEFAULT_SHIFT_ID for record in body.get("services", [])
+    )
+    if uses_default_shift and "shifts" not in body:
+        body = {**body, "shifts": [shift()]}
     return await client.put(URL, json=body)
 
 
@@ -741,25 +754,71 @@ async def test_servicio_shift_id_ida_y_vuelta(client: AsyncClient) -> None:
     assert stored["shiftId"] == "sh1"
 
 
-async def test_servicio_sin_shift_id_no_lo_trae(client: AsyncClient) -> None:
+TRIP_NEEDS_SHIFT = [{"campo": "services.shiftId", "mensaje": "El viaje necesita un turno"}]
+
+
+async def assert_trip_needs_shift(response: Any) -> None:
+    assert response.status_code == 422
+    error = response.json()
+    assert error["code"] == "trip_requires_shift"
+    assert error["details"] == TRIP_NEEDS_SHIFT
+
+
+async def test_servicio_vivo_sin_shift_id_devuelve_422(client: AsyncClient) -> None:
+    sin_turno = {key: value for key, value in svc().items() if key != "shiftId"}
+    await assert_trip_needs_shift(await client.put(URL, json={"services": [sin_turno]}))
+    assert await get_col(client, "services") == []
+
+
+async def test_servicio_vivo_con_shift_id_nulo_devuelve_422(client: AsyncClient) -> None:
+    await assert_trip_needs_shift(await client.put(URL, json={"services": [svc(shiftId=None)]}))
+    assert await get_col(client, "services") == []
+
+
+async def test_servicio_vivo_sin_turno_no_aplica_nada_a_medias(client: AsyncClient) -> None:
+    body = {
+        "shifts": [shift()],
+        "services": [svc(id="ok"), svc(id="sin-turno", shiftId=None)],
+    }
+    await assert_trip_needs_shift(await client.put(URL, json=body))
+    assert await get_col(client, "services") == []
+    assert await get_col(client, "shifts") == []
+
+
+async def test_actualizar_servicio_quitandole_el_turno_devuelve_422(client: AsyncClient) -> None:
     await put(client, {"services": [svc()]})
+    response = await client.put(URL, json={"services": [svc(updatedAt=T2, shiftId=None)]})
+    await assert_trip_needs_shift(response)
     [stored] = await get_col(client, "services")
-    assert "shiftId" not in stored
+    assert stored["shiftId"] == "sh1" and stored["updatedAt"] == T1
 
 
-async def test_servicio_omitir_shift_id_lo_desliga(client: AsyncClient) -> None:
-    await put(client, {"shifts": [shift()], "services": [svc(shiftId="sh1")]})
-    await put(client, {"services": [svc(updatedAt=T2)]})
+async def test_lapida_de_servicio_sin_turno_se_acepta(client: AsyncClient) -> None:
+    response = await client.put(URL, json={"services": [svc(shiftId=None, deleted=True)]})
+    assert response.status_code == 200
+    assert response.json()["applied"]["services"] == 1
     [stored] = await get_col(client, "services")
-    assert "shiftId" not in stored
-    assert stored["updatedAt"] == "2026-11-04T11:00:00Z"
+    assert stored["deleted"] is True
 
 
-async def test_servicio_shift_id_nulo_lo_desliga(client: AsyncClient) -> None:
-    await put(client, {"shifts": [shift()], "services": [svc(shiftId="sh1")]})
-    await put(client, {"services": [svc(updatedAt=T2, shiftId=None)]})
+async def test_violacion_del_check_de_turno_se_traduce_a_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Red de seguridad: si la validación previa fallara, el CHECK de la BD da el mismo 422."""
+    monkeypatch.setattr(controller, "ensure_live_trips_have_shift", lambda _records: None)
+    response = await client.put(URL, json={"services": [svc(shiftId=None)]})
+    await assert_trip_needs_shift(response)
+    assert await get_col(client, "services") == []
+
+
+async def test_actualizar_servicio_con_turno_se_aplica(
+    client: AsyncClient,
+) -> None:
+    await put(client, {"services": [svc(shiftId="sh1")]})
+    response = await put(client, {"services": [svc(updatedAt=T2, amount=30)]})
+    assert response.status_code == 200
     [stored] = await get_col(client, "services")
-    assert "shiftId" not in stored
+    assert stored["amount"] == 30 and stored["shiftId"] == "sh1"
 
 
 async def test_servicio_antes_que_su_turno_en_el_mismo_put(client: AsyncClient) -> None:

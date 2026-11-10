@@ -21,10 +21,12 @@ from app.modules.services.models import Service
 from app.modules.settings.models import Setting
 from app.modules.shifts.models import Shift, ShiftTemplate
 from app.modules.snapshot import repository
-from app.modules.snapshot.exceptions import UnknownCatalogCode
+from app.modules.snapshot.exceptions import TripRequiresShift, UnknownCatalogCode
 from app.modules.snapshot.schemas import SnapshotRead, SnapshotResult, SnapshotWrite
 
 FOREIGN_KEY_VIOLATION = "23503"
+CHECK_VIOLATION = "23514"
+SHIFT_REQUIRED_CONSTRAINT = "ck_services_shift_required"
 KEY_DETAIL = re.compile(r"\((?P<column>\w+)\)=\((?P<value>.*?)\)")  # sin depender del idioma
 
 # colección del snapshot -> modelo
@@ -103,16 +105,39 @@ async def _commit_checking_catalog_codes(session: AsyncSession) -> None:
         raise UnknownCatalogCode([detail]) from error
 
 
+def ensure_live_trips_have_shift(services: list[Any]) -> None:
+    """Un viaje vivo sin `shift_id` se rechaza antes de tocar la BD (la lápida no lo exige)."""
+    if any(not service.deleted and service.shift_id is None for service in services):
+        raise TripRequiresShift
+
+
+def _is_shift_required_violation(error: IntegrityError) -> bool:
+    cause = getattr(error.orig, "__cause__", None) or error.orig
+    return (
+        getattr(cause, "sqlstate", None) == CHECK_VIOLATION
+        and getattr(cause, "constraint_name", None) == SHIFT_REQUIRED_CONSTRAINT
+    )
+
+
 async def apply_snapshot(session: AsyncSession, snapshot: SnapshotWrite) -> SnapshotResult:
     """Aplica el snapshot parcial en una sola transacción."""
+    ensure_live_trips_have_shift(_latest_per_id(snapshot.services))
     applied: dict[str, int] = {}
     skipped: dict[str, int] = {}
-    for col, model in MODELS.items():
-        incoming = getattr(snapshot, col)
-        unique = _latest_per_id(incoming)
-        rows = [rec.model_dump() for rec in unique]
-        key = to_camel(col)
-        applied[key] = await repository.upsert_lww(session, model, rows) if rows else 0
-        skipped[key] = len(incoming) - applied[key]
+    try:
+        # En una sesión reutilizada puede arrastrar IMMEDIATE de un PUT anterior.
+        await session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+        for col, model in MODELS.items():
+            incoming = getattr(snapshot, col)
+            unique = _latest_per_id(incoming)
+            rows = [rec.model_dump() for rec in unique]
+            key = to_camel(col)
+            applied[key] = await repository.upsert_lww(session, model, rows) if rows else 0
+            skipped[key] = len(incoming) - applied[key]
+    except IntegrityError as error:  # red de seguridad: el CHECK del turno da el mismo 422
+        await session.rollback()
+        if _is_shift_required_violation(error):
+            raise TripRequiresShift from error
+        raise
     await _commit_checking_catalog_codes(session)
     return SnapshotResult(applied=applied, skipped=skipped)

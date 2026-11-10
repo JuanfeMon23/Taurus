@@ -30,7 +30,7 @@ describe('formatDuration', () => {
 })
 
 describe('validateTrip', () => {
-  const ok = { startTime: '08:00', endTime: '08:30', distanceKm: 5, amount: 12000 }
+  const ok = { startTime: '08:00', endTime: '08:30', distanceKm: 5, amount: 12000, shiftId: 'turno-1' }
   it('una fila completa es válida; los lugares son opcionales', () => {
     expect(validateTrip(ok)).toEqual({})
     expect(validateTrip({ ...ok, origin: 'A', destination: 'B' })).toEqual({})
@@ -40,7 +40,7 @@ describe('validateTrip', () => {
   })
   it('marca cada obligatorio faltante con mensaje legible', () => {
     const errors = validateTrip({})
-    expect(Object.keys(errors).sort()).toEqual(['amount', 'distanceKm', 'endTime', 'startTime'])
+    expect(Object.keys(errors).sort()).toEqual(['amount', 'distanceKm', 'endTime', 'shiftId', 'startTime'])
     expect(errors.startTime).toBe('Falta la hora de recogida')
   })
   it('rechaza distancia negativa y monto no positivo', () => {
@@ -70,7 +70,7 @@ describe('hasTripData', () => {
 })
 
 describe('bonus del viaje', () => {
-  const ok = { startTime: '08:00', endTime: '08:30', distanceKm: 5, amount: 10000 }
+  const ok = { startTime: '08:00', endTime: '08:30', distanceKm: 5, amount: 10000, shiftId: 'turno-1' }
   it('es opcional: vacío, nulo o cero son válidos', () => {
     expect(validateTrip({ ...ok, bonus: null })).toEqual({})
     expect(validateTrip({ ...ok, bonus: 0 })).toEqual({})
@@ -83,5 +83,16 @@ describe('bonus del viaje', () => {
   it('tripTotal suma dinero y bonus (ausente cuenta 0)', () => {
     expect(tripTotal({ amount: 10000, bonus: 2000 })).toBe(12000)
     expect(tripTotal({ amount: 10000 })).toBe(10000)
+  })
+})
+
+describe('turno obligatorio del viaje', () => {
+  const valid = { startTime: '10:00', endTime: '10:30', distanceKm: 5, amount: 20 }
+  it('sin turno da el error «Elige el turno del viaje»', () => {
+    expect(validateTrip({ ...valid, shiftId: '' }).shiftId).toBe('Elige el turno del viaje')
+    expect(validateTrip(valid).shiftId).toBe('Elige el turno del viaje')
+  })
+  it('con turno no hay error de turno', () => {
+    expect(validateTrip({ ...valid, shiftId: 'a' }).shiftId).toBeUndefined()
   })
 })

@@ -22,11 +22,20 @@ from app.modules.settings.models import Setting
 from app.modules.shifts.models import Shift, ShiftTemplate
 
 DEFAULT_DATE = date(2026, 11, 4)
+# Todo viaje vivo exige turno (CHECK ck_services_shift_required); las FK son diferidas.
+INSERT_SHIFT_SQL = "insert into shifts (id, date, start_time) values ('{k}', now(), '08:00')"
 
 
 def service(**overrides: Any) -> Service:
     return Service(
-        **{"id": "s1", "date": DEFAULT_DATE, "amount": 10, "method": "cash", **overrides}
+        **{
+            "id": "s1",
+            "date": DEFAULT_DATE,
+            "amount": 10,
+            "method": "cash",
+            "shift_id": "sh1",
+            **overrides,
+        }
     )
 
 
@@ -490,7 +499,12 @@ async def test_rate_mode_defaults_and_empty_name(session: AsyncSession) -> None:
 
 
 ORPHAN_INSERTS = [
-    ("services", "insert into services (id, date, amount, method) values ('{k}', now(), 1, 'zz')"),
+    (
+        "services",
+        "with turno as (" + INSERT_SHIFT_SQL.replace("{k}", "{k}-sh") + " returning id) "
+        "insert into services (id, date, amount, method, shift_id) "
+        "select '{k}', now(), 1, 'zz', id from turno",
+    ),
     (
         "movements",
         "insert into movements (id, date, type, amount, method) "
@@ -534,10 +548,11 @@ async def test_child_before_catalog_in_same_transaction_commits(test_url: str) -
     engine = create_async_engine(test_url)
     try:
         async with engine.begin() as conn:
+            await conn.execute(text(INSERT_SHIFT_SQL.format(k="fk-early-sh")))
             await conn.execute(
                 text(
-                    "insert into services (id, date, amount, method) "
-                    "values ('fk-early', now(), 1, 'card')"
+                    "insert into services (id, date, amount, method, shift_id) "
+                    "values ('fk-early', now(), 1, 'card', 'fk-early-sh')"
                 )
             )
             await conn.execute(
@@ -552,6 +567,7 @@ async def test_child_before_catalog_in_same_transaction_commits(test_url: str) -
     finally:
         async with engine.begin() as conn:
             await conn.execute(text("delete from services where id = 'fk-early'"))
+            await conn.execute(text("delete from shifts where id = 'fk-early-sh'"))
             await conn.execute(text("delete from payment_methods where id = 'card'"))
         await engine.dispose()
 
@@ -566,10 +582,11 @@ async def test_tombstoned_catalog_row_keeps_references_valid(test_url: str) -> N
                     "values ('old', 'Vieja', false, false)"
                 )
             )
+            await conn.execute(text(INSERT_SHIFT_SQL.format(k="fk-tomb-sh")))
             await conn.execute(
                 text(
-                    "insert into services (id, date, amount, method) "
-                    "values ('fk-tomb', now(), 1, 'old')"
+                    "insert into services (id, date, amount, method, shift_id) "
+                    "values ('fk-tomb', now(), 1, 'old', 'fk-tomb-sh')"
                 )
             )
         async with engine.begin() as conn:
@@ -579,5 +596,15 @@ async def test_tombstoned_catalog_row_keeps_references_valid(test_url: str) -> N
     finally:
         async with engine.begin() as conn:
             await conn.execute(text("delete from services where id = 'fk-tomb'"))
+            await conn.execute(text("delete from shifts where id = 'fk-tomb-sh'"))
             await conn.execute(text("delete from payment_methods where id = 'old'"))
         await engine.dispose()
+
+
+async def test_live_service_without_shift_rejected(session: AsyncSession) -> None:
+    await assert_rejected(session, service(shift_id=None), "ck_services_shift_required")
+
+
+async def test_deleted_service_without_shift_accepted(session: AsyncSession) -> None:
+    session.add(service(shift_id=None, deleted=True))
+    await session.flush()

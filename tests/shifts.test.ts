@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activeShiftTemplates, appliedTemplateIds, buildShiftFromTemplate, clockNow, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, tripsOfShift, unlinkShiftTrips, copyClosedShifts, findOpenShift, previousDay, shiftForTemplate, totalShiftMinutes, withShiftOnlyDays } from '../app/utils/shifts'
+import { activeShiftTemplates, appliedTemplateIds, buildShiftFromTemplate, clockNow, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, tripsOfShift, shiftRemovalBlock, chipRangeLabel, copyClosedShifts, findOpenShift, previousDay, shiftForTemplate, totalShiftMinutes, withShiftOnlyDays } from '../app/utils/shifts'
 import type { Shift, ShiftTemplate } from '../app/services/types'
 
 const shift = (startTime: string, endTime?: string): Shift => ({ id: startTime, date: '2026-11-06', startTime, ...(endTime ? { endTime } : {}) })
@@ -98,20 +98,36 @@ describe('turno de un viaje', () => {
     expect(defaultTripShiftId([dayShift('a', 'manana')], 'noche')).toBe('a')
     expect(defaultTripShiftId([dayShift('a')], undefined)).toBe('a')
   })
-  it('defaultTripShiftId da vacío con varios turnos sin coincidencia o sin turnos', () => {
-    expect(defaultTripShiftId([dayShift('a', 'manana'), dayShift('b', 'noche')], 'tarde')).toBe('')
-    expect(defaultTripShiftId([dayShift('a', 'manana'), dayShift('b', 'noche')], undefined)).toBe('')
+  it('defaultTripShiftId con varios turnos sin plantilla elige el que contiene la hora de recogida', () => {
+    const shifts = [{ ...dayShift('a', 'manana') }, { ...dayShift('b', 'noche'), startTime: '18:00', endTime: '23:00' }]
+    expect(defaultTripShiftId(shifts, undefined, '19:30')).toBe('b')
+    expect(defaultTripShiftId(shifts, 'tarde', '07:00')).toBe('a')
+  })
+  it('defaultTripShiftId sin coincidencia de hora elige el último turno por hora de inicio', () => {
+    const shifts = [{ ...dayShift('b', 'noche'), startTime: '18:00', endTime: '23:00' }, dayShift('a', 'manana')]
+    expect(defaultTripShiftId(shifts, undefined)).toBe('b')
+    expect(defaultTripShiftId(shifts, undefined, '14:00')).toBe('b')
+  })
+  it('defaultTripShiftId contiene la hora en turnos que cruzan la medianoche', () => {
+    const shifts = [{ ...dayShift('n'), startTime: '22:00', endTime: '02:00' }, { ...dayShift('m'), startTime: '23:30', endTime: '23:50' }]
+    expect(defaultTripShiftId(shifts, undefined, '01:00')).toBe('n')
+  })
+  it('defaultTripShiftId da vacío solo si el día no tiene turnos', () => {
     expect(defaultTripShiftId([], 'noche')).toBe('')
+  })
+  it('shiftRemovalBlock avisa con el número de viajes ligados', () => {
+    expect(shiftRemovalBlock([trip('1', 'a'), trip('2', 'a'), trip('3', 'b')], 'a')).toBe('Este turno tiene 2 viajes; cámbialos a otro turno antes de quitarlo')
+    expect(shiftRemovalBlock([trip('1', 'a')], 'a')).toBe('Este turno tiene 1 viaje; cámbialo a otro turno antes de quitarlo')
+    expect(shiftRemovalBlock([trip('1', 'b')], 'a')).toBe('')
+  })
+  it('chipRangeLabel omite la franja cuando el nombre ya contiene la hora', () => {
+    expect(chipRangeLabel('Mañana 06:00–10:00', '06:00–10:00')).toBe('')
+    expect(chipRangeLabel('4:30 a 7:00 am', '04:30–07:00')).toBe('')
+    expect(chipRangeLabel('Mañana', '06:00–10:00')).toBe('06:00–10:00')
+    expect(chipRangeLabel('Turno suelto', '06:00–10:00')).toBe('06:00–10:00')
   })
   it('tripsOfShift devuelve los viajes ligados al turno', () => {
     expect(tripsOfShift([trip('1', 'a'), trip('2', 'b'), trip('3')], 'a').map(item => item.id)).toEqual(['1'])
-  })
-  it('unlinkShiftTrips quita el shiftId solo de los viajes de ese turno, sin mutar', () => {
-    const original = [trip('1', 'a'), trip('2', 'b')]
-    const result = unlinkShiftTrips(original, 'a')
-    expect(result[0]).not.toHaveProperty('shiftId')
-    expect(result[1]?.shiftId).toBe('b')
-    expect(original[0]?.shiftId).toBe('a')
   })
   it('recuerda la última plantilla en el storage y tolera storage roto', () => {
     const data = new Map<string, string>()

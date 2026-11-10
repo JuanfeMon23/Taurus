@@ -9,7 +9,7 @@ import { GENERIC_ERROR, toUserMessage } from '../utils/errors'
 import { categoryIcon, methodIcon } from '../utils/icons'
 import { formatDuration, sumDistance, tripMinutes, tripTotal, validateTrip, type TripErrors } from '../utils/trip'
 import { dayActivity } from '../utils/activity'
-import { activeShiftTemplates, activityNow, buildShiftFromTemplate, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, shiftForTemplate, tripsOfShift, unlinkShiftTrips, clockNow } from '../utils/shifts'
+import { activeShiftTemplates, activityNow, buildShiftFromTemplate, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, shiftForTemplate, chipRangeLabel, shiftRemovalBlock, tripsOfShift, clockNow } from '../utils/shifts'
 import type { Service, Shift, ShiftTemplate } from '../services/types'
 
 // Un solo formulario de viaje; al guardar el viaje queda en el día y el formulario se vacía.
@@ -25,7 +25,7 @@ type Form = {
   isIndrive: boolean
   origin: string
   destination: string
-  shiftId: string // '' = sin turno
+  shiftId: string // obligatorio; '' solo mientras no se elige (viaje viejo sin turno)
 }
 const { catalogs, activeMethods, defaultMethod, refreshCatalogs } = useCatalogs()
 // Medios ofrecidos: los activos y, al editar un viaje, el que ya tenía aunque se haya desactivado.
@@ -42,7 +42,6 @@ const trips = ref<Service[]>([])
 const shifts = ref<Shift[]>([])
 const templates = ref<ShiftTemplate[]>([])
 const shiftBusy = ref(false)
-const confirmingShift = ref<string | null>(null)
 const form = ref<Form>(blank())
 const categories = ref<Category[]>([])
 const rates = ref<CommissionRates>({ ...DEFAULT_RATES })
@@ -72,7 +71,6 @@ async function load() {
   extraKm.value = extra > 0 ? extra : null
   note.value = existing?.note ?? ''
   confirming.value = null
-  confirmingShift.value = null
   form.value = blank()
   attempted.value = false
 }
@@ -126,14 +124,17 @@ const shiftNameById = (shiftId?: string) => {
   const shift = shiftId ? shifts.value.find(candidate => candidate.id === shiftId) : undefined
   return shift ? `${shiftName(shift)} ${shiftRange(shift)}` : ''
 }
-const shiftChoiceValid = (shiftId: string) => !shiftId || shifts.value.some(shift => shift.id === shiftId)
+const shiftChoiceValid = (shiftId: string) => !!shiftId && shifts.value.some(shift => shift.id === shiftId)
+const chipRange = (name: string, range: string) => chipRangeLabel(name, range)
 
 // Al cambiar los turnos del día, un viaje nuevo recalcula su turno por defecto si el elegido ya no existe o aún no se tocó.
 const shiftTouched = ref(false)
 function syncFormShift() {
   if (form.value.id) return
-  if (!shiftTouched.value || !shiftChoiceValid(form.value.shiftId)) form.value.shiftId = defaultTripShiftId(shifts.value, loadLastShiftTemplateId())
+  if (!shiftTouched.value || !shiftChoiceValid(form.value.shiftId)) form.value.shiftId = defaultTripShiftId(shifts.value, loadLastShiftTemplateId(), form.value.startTime)
 }
+// Con varios turnos y sin plantilla recordada, la hora de recogida escrita orienta el turno mientras no se elija a mano.
+watch(() => form.value.startTime, syncFormShift)
 function pickShift(shiftId: string) {
   form.value.shiftId = shiftId
   shiftTouched.value = true
@@ -148,17 +149,14 @@ async function toggleShiftChip(chip: ShiftChip) {
       await taurus.repo.saveShift(buildShiftFromTemplate(chip.template!, date.value))
       show(`${chip.name} agregado al día`)
     } else {
-      const linked = tripsOfShift(trips.value, existing.id)
-      if (linked.length && confirmingShift.value !== existing.id) {
-        confirmingShift.value = existing.id
-        setTimeout(() => confirmingShift.value === existing.id && (confirmingShift.value = null), 2500)
+      const blocked = shiftRemovalBlock(trips.value, existing.id)
+      if (blocked) {
+        show(blocked, 'error')
         return
       }
       shiftBusy.value = true
-      // Primero se desligan los viajes: el servidor rechaza viajes que apunten a un turno inexistente.
-      if (linked.length) await taurus.saveDay({ date: date.value, km: totalKm.value, note: note.value || undefined, services: unlinkShiftTrips(trips.value, existing.id) })
       await taurus.repo.deleteShift(existing.id)
-      show(linked.length ? `${chip.name} quitado; ${linked.length} ${linked.length === 1 ? 'viaje quedó' : 'viajes quedaron'} sin turno` : `${chip.name} quitado del día`)
+      show(`${chip.name} quitado del día`)
     }
     const editingId = form.value.id
     const draft = { ...form.value }
@@ -186,7 +184,8 @@ const tripKm = computed(() => sumDistance(trips.value))
 const duration = computed(() => formatDuration(tripMinutes(form.value.startTime, form.value.endTime)))
 // Vista previa en vivo; al guardar se calcula con las tasas vigentes y queda fija en el viaje.
 const preview = computed(() => computeCommission(typeof form.value.amount === 'number' ? form.value.amount : 0, form.value.isIndrive, rates.value))
-const errors = computed<TripErrors>(() => validateTrip(form.value))
+const errors = computed<TripErrors>(() => validateTrip({ ...form.value, shiftId: shiftChoiceValid(form.value.shiftId) ? form.value.shiftId : '' }))
+const tripsWithoutShift = computed(() => trips.value.filter(trip => !trip.shiftId).length)
 const showErr = (field: keyof TripErrors) => (attempted.value ? errors.value[field] : undefined)
 
 async function persist(services: Service[]) {
@@ -197,6 +196,10 @@ async function persist(services: Service[]) {
 
 async function saveTrip() {
   attempted.value = true
+  if (!shifts.value.length) {
+    show('Marca un turno del día arriba para registrar viajes', 'error')
+    return
+  }
   if (Object.keys(errors.value).length > 0) {
     show('Revisa los campos marcados', 'error')
     return
@@ -214,7 +217,7 @@ async function saveTrip() {
     distanceKm: formValues.distanceKm as number,
     origin: formValues.origin.trim() || undefined,
     destination: formValues.destination.trim() || undefined,
-    shiftId: formValues.shiftId || undefined,
+    shiftId: formValues.shiftId,
   }
   saving.value = true
   try {
@@ -284,7 +287,7 @@ async function saveMeta() {
     <!-- Columna izquierda: día y formulario de viaje -->
     <div class="stack">
       <div class="card stack">
-        <div class="grid2">
+        <div class="grid3">
           <label class="field">
             <span>Fecha</span>
             <div class="input-icon">
@@ -299,22 +302,21 @@ async function saveMeta() {
               <input v-model.number="extraKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" @change="saveMeta">
             </div>
           </label>
+          <label class="field">
+            <span>Nota</span>
+            <div class="input-icon">
+              <NotebookPen :size="18" />
+              <input v-model="note" type="text" placeholder="Opcional" class="input" @change="saveMeta">
+            </div>
+          </label>
         </div>
         <span class="small muted">Km del día: <b class="num">{{ totals.km }}</b> km = viajes {{ tripKm }} + extra {{ extraKm ?? 0 }}</span>
-        <label class="field">
-          <span>Nota</span>
-          <div class="input-icon">
-            <NotebookPen :size="18" />
-            <input v-model="note" type="text" placeholder="Opcional" class="input" @change="saveMeta">
-          </div>
-        </label>
         <div class="field">
           <span>Turnos</span>
           <div v-if="shiftChips.length" class="shift-chips" role="group" aria-label="Turnos del día">
-            <button v-for="chip in shiftChips" :key="chip.key" type="button" class="chip shift-chip" :class="{ on: !!chip.shift, confirm: !!chip.shift && confirmingShift === chip.shift.id }"
+            <button v-for="chip in shiftChips" :key="chip.key" type="button" class="chip shift-chip" :class="{ on: !!chip.shift }" :title="`${chip.name} ${chip.range}`"
               :aria-pressed="!!chip.shift" :disabled="shiftBusy" :data-template="chip.template?.id" :data-shift="chip.shift?.id" @click="toggleShiftChip(chip)">
-              <template v-if="chip.shift && confirmingShift === chip.shift.id">Quitar: {{ tripsOfShift(trips, chip.shift.id).length }} viaje(s) quedarán sin turno. Toca otra vez</template>
-              <template v-else><b>{{ chip.name }}</b> <span class="num">{{ chip.range }}</span></template>
+              <b>{{ chip.name }}</b> <span v-if="chipRange(chip.name, chip.range)" class="num">{{ chipRange(chip.name, chip.range) }}</span>
             </button>
           </div>
           <p v-else class="muted small">Registra tus turnos habituales en Tarifas para marcarlos aquí con un toque.</p>
@@ -327,17 +329,18 @@ async function saveMeta() {
           <button v-if="form.id" type="button" class="btn ghost small-btn" @click="resetForm"><X :size="16" /> Cancelar edición</button>
         </div>
 
-        <div v-if="shifts.length" class="field">
+        <div class="field">
           <span>Turno</span>
-          <div class="shift-chips" role="group" aria-label="Turno del viaje">
-            <button type="button" class="chip shift-chip" :class="{ on: !form.shiftId }" :aria-pressed="!form.shiftId" data-trip-shift="" @click="pickShift('')">Sin turno</button>
-            <button v-for="shift in shifts" :key="shift.id" type="button" class="chip shift-chip" :class="{ on: form.shiftId === shift.id }"
+          <div v-if="shifts.length" class="shift-chips" role="group" aria-label="Turno del viaje">
+            <button v-for="shift in shifts" :key="shift.id" type="button" class="chip shift-chip" :class="{ on: form.shiftId === shift.id }" :title="`${shiftName(shift)} ${shiftRange(shift)}`"
               :aria-pressed="form.shiftId === shift.id" :data-trip-shift="shift.id" @click="pickShift(shift.id)">
-              <b>{{ shiftName(shift) }}</b> <span class="num">{{ shiftRange(shift) }}</span>
+              <b>{{ shiftName(shift) }}</b> <span v-if="chipRange(shiftName(shift), shiftRange(shift))" class="num">{{ chipRange(shiftName(shift), shiftRange(shift)) }}</span>
             </button>
           </div>
+          <p v-else class="warn small" role="status">Marca un turno del día arriba para registrar viajes</p>
+          <small v-if="showErr('shiftId') && shifts.length" class="err" role="alert">{{ showErr('shiftId') }}</small>
         </div>
-        <div class="grid2">
+        <div class="grid4">
           <label class="field">
             <span>Recogida</span>
             <input ref="firstField" v-model="form.startTime" type="time" class="input" :aria-invalid="!!showErr('startTime')">
@@ -348,27 +351,19 @@ async function saveMeta() {
             <input v-model="form.endTime" type="time" class="input" :aria-invalid="!!showErr('endTime')">
             <small v-if="showErr('endTime')" class="err" role="alert">{{ showErr('endTime') }}</small>
           </label>
-        </div>
-        <div class="grid2">
           <label class="field">
             <span>Duración</span>
-            <div class="input-icon">
-              <Clock :size="18" />
-              <input :value="duration" class="input" readonly tabindex="-1" placeholder="—" aria-label="Duración calculada">
-            </div>
+            <input :value="duration" class="input" readonly tabindex="-1" placeholder="—" aria-label="Duración calculada">
           </label>
           <label class="field">
             <span>Distancia (km)</span>
-            <div class="input-icon">
-              <Route :size="18" />
-              <input v-model.number="form.distanceKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('distanceKm')">
-            </div>
+            <input v-model.number="form.distanceKm" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('distanceKm')">
             <small v-if="showErr('distanceKm')" class="err" role="alert">{{ showErr('distanceKm') }}</small>
           </label>
         </div>
 
-        <div class="row" style="align-items: flex-start">
-          <label class="field grow">
+        <div class="money-row">
+          <label class="field money">
             <span>Dinero</span>
             <div class="input-icon">
               <component :is="methodIcon(form.method, methodAffectsCash(catalogs.paymentMethods, form.method))" :size="18" />
@@ -382,23 +377,24 @@ async function saveMeta() {
               {{ method.name }}
             </button>
           </div>
+          <label class="field bonus">
+            <span>Bonus / propina (opcional)</span>
+            <div class="input-icon">
+              <Gift :size="18" />
+              <input v-model.number="form.bonus" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('bonus')">
+            </div>
+            <small v-if="showErr('bonus')" class="err" role="alert">{{ showErr('bonus') }}</small>
+          </label>
         </div>
 
-        <label class="check">
-          <input v-model="form.isIndrive" type="checkbox">
-          <span>Viaje inDrive</span>
-        </label>
-        <p v-if="form.isIndrive" class="muted small num" aria-live="polite">Comisión {{ money(preview.commission) }} + IVA {{ money(preview.commissionVat) }}</p>
-        <p v-else class="muted small">Viaje propio: sin comisión.</p>
-
-        <label class="field">
-          <span>Bonus / propina (opcional)</span>
-          <div class="input-icon">
-            <Gift :size="18" />
-            <input v-model.number="form.bonus" type="number" inputmode="decimal" min="0" step="any" placeholder="0" class="input" :aria-invalid="!!showErr('bonus')">
-          </div>
-          <small v-if="showErr('bonus')" class="err" role="alert">{{ showErr('bonus') }}</small>
-        </label>
+        <div class="row commission-row">
+          <label class="check">
+            <input v-model="form.isIndrive" type="checkbox">
+            <span>Viaje inDrive</span>
+          </label>
+          <p v-if="form.isIndrive" class="muted small num" aria-live="polite">Comisión {{ money(preview.commission) }} + IVA {{ money(preview.commissionVat) }}</p>
+          <p v-else class="muted small">Viaje propio: sin comisión.</p>
+        </div>
 
         <div class="grid2">
           <label class="field">
@@ -417,7 +413,7 @@ async function saveMeta() {
           </label>
         </div>
 
-        <button type="submit" class="btn primary block big" :disabled="saving">
+        <button type="submit" class="btn primary block big" :disabled="saving || !shifts.length">
           <Check :size="20" /> {{ form.id ? 'Guardar cambios' : 'Guardar viaje' }}
         </button>
       </form>
@@ -463,6 +459,7 @@ async function saveMeta() {
     <div class="stack trips-col">
       <div class="card stack trips-card" style="gap: 10px">
         <span class="title">Viajes del día</span>
+        <p v-if="tripsWithoutShift" class="warn small" role="status">Hay viajes de este día sin turno; asígnales uno</p>
         <p v-if="!sorted.length" class="muted small">Aún no hay viajes en este día.</p>
         <TransitionGroup v-else name="list" tag="ul" class="trip-list trip-scroll rel">
           <li v-for="(trip, i) in sorted" :key="trip.id ?? i" class="trip" :class="{ active: form.id && form.id === trip.id }">
@@ -480,6 +477,7 @@ async function saveMeta() {
                 <template v-if="trip.distanceKm !== undefined">{{ trip.distanceKm }} km · </template>{{ entryName(catalogs.paymentMethods, trip.method ?? defaultMethod) }}
               </p>
               <p v-if="shiftNameById(trip.shiftId)" class="muted small"><Layers :size="12" class="inline-icon" /> {{ shiftNameById(trip.shiftId) }}</p>
+              <p v-else class="warn small no-shift"><Layers :size="12" class="inline-icon" /> Sin turno</p>
               <p v-if="trip.isIndrive === false" class="muted small">Propio</p>
               <p v-else-if="(trip.commission ?? 0) > 0" class="muted small num">Comisión {{ money(trip.commission!) }} + IVA {{ money(trip.commissionVat ?? 0) }}</p>
               <p v-if="tripSummary(trip).route" class="muted small">{{ tripSummary(trip).route }}</p>
@@ -501,8 +499,25 @@ async function saveMeta() {
 @media (min-width: 1000px) { .day-grid { grid-template-columns: minmax(380px, 5fr) minmax(0, 6fr); gap: 20px; } }
 @media (min-width: 1400px) { .day-grid { grid-template-columns: minmax(340px, 4fr) minmax(0, 4fr) minmax(380px, 4fr); } }
 .rel { position: relative; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.methods { display: flex; flex-direction: column; gap: 6px; margin-top: 24px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 600px) { .grid3 { grid-template-columns: 1fr; } .grid4 { grid-template-columns: 1fr 1fr; } }
+/* Formulario condensado: menos relleno vertical para que Hoy quepa sin scroll en escritorio. */
+.day-grid .card { padding: 12px; }
+.day-grid .stack { gap: 10px; }
+.day-grid .field { gap: 4px; }
+.day-grid .input { padding: 8px 12px; }
+.day-grid .input-icon > .input { padding-left: 38px; }
+.day-grid .input-icon > svg { left: 11px; }
+.day-grid .field > span { font-size: 12px; }
+.money-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.money-row .money { flex: 1 1 130px; }
+.money-row .bonus { flex: 1 1 150px; }
+.commission-row { gap: 12px; flex-wrap: wrap; }
+.commission-row p { margin: 0; }
+.warn { color: var(--accent); font-weight: 600; margin: 0; }
+.methods { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 3px; }
 .method { justify-content: center; }
 .method[aria-pressed='false'] { opacity: 0.45; }
 .check { display: flex; align-items: center; gap: 10px; cursor: pointer; font-weight: 600; }
@@ -516,12 +531,12 @@ async function saveMeta() {
 .trip-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 @media (min-width: 1400px) {
   .trips-col { align-self: stretch; }
-  .trips-card { position: sticky; top: 24px; max-height: calc(100vh - 48px); }
+  .trips-card { position: sticky; top: 24px; max-height: calc(100vh - 105px); }
 }
-.shift-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.shift-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.shift-chip { padding: 6px 10px; }
 .shift-chip { background: var(--surface-2); color: var(--text-2); border: 1.5px solid transparent; }
 .shift-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
-.shift-chip.confirm { border-color: var(--neg); color: var(--neg); }
 .shift-chip:disabled { opacity: 0.5; pointer-events: none; }
 .inline-icon { display: inline; vertical-align: -1px; }
 .out-of-shift { color: var(--info); font-weight: 600; }

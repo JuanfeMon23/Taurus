@@ -62,23 +62,43 @@ export function withShiftOnlyDays(days: DayRecord[], shifts: Shift[]): DayRecord
   return [...days, ...emptyDays]
 }
 
-/** Turno por defecto de un viaje nuevo: el de la última plantilla usada si está marcada en el día; si no, el único turno del día; si no, vacío (sin turno). */
-export function defaultTripShiftId(shifts: Shift[], lastTemplateId?: string): string {
+/**
+ * Turno por defecto de un viaje nuevo (nunca vacío si el día tiene turnos). Orden de reglas:
+ * 1) el turno de la última plantilla usada, si está marcada en el día;
+ * 2) el único turno del día;
+ * 3) el turno que contiene la hora de recogida, si ya está escrita (los turnos que cruzan la medianoche cuentan);
+ * 4) el último turno del día por hora de inicio.
+ * Vacío solo si el día no tiene turnos.
+ */
+export function defaultTripShiftId(shifts: Shift[], lastTemplateId?: string, pickupTime?: string): string {
   const remembered = lastTemplateId ? shiftForTemplate(shifts, lastTemplateId) : undefined
   if (remembered) return remembered.id
-  return shifts.length === 1 ? shifts[0]!.id : ''
+  if (shifts.length <= 1) return shifts[0]?.id ?? ''
+  const containing = pickupTime
+    ? shifts.find(shift => {
+        const offset = tripMinutes(shift.startTime, pickupTime)
+        const length = tripMinutes(shift.startTime, shift.endTime)
+        return offset !== null && length !== null && offset <= length
+      })
+    : undefined
+  if (containing) return containing.id
+  return [...shifts].sort((first, second) => first.startTime.localeCompare(second.startTime)).at(-1)!.id
 }
 
 /** Viajes ligados a un turno del día. */
 export const tripsOfShift = <T extends Pick<Service, 'shiftId'>>(trips: T[], shiftId: string): T[] => trips.filter(trip => trip.shiftId === shiftId)
 
-/** Copia de los viajes donde los ligados a `shiftId` quedan sin turno. */
-export const unlinkShiftTrips = <T extends Pick<Service, 'shiftId'>>(trips: T[], shiftId: string): T[] =>
-  trips.map(trip => {
-    if (trip.shiftId !== shiftId) return trip
-    const { shiftId: _removed, ...rest } = trip
-    return rest as T
-  })
+/** Aviso que bloquea quitar un turno con viajes ligados; vacío si se puede quitar. */
+export function shiftRemovalBlock(trips: Pick<Service, 'shiftId'>[], shiftId: string): string {
+  const count = tripsOfShift(trips, shiftId).length
+  if (!count) return ''
+  return count === 1
+    ? 'Este turno tiene 1 viaje; cámbialo a otro turno antes de quitarlo'
+    : `Este turno tiene ${count} viajes; cámbialos a otro turno antes de quitarlo`
+}
+
+/** Franja HH:MM–HH:MM para mostrar junto al nombre del turno; vacía si el nombre ya trae una hora (p. ej. «4:30 a 7:00 am»). */
+export const chipRangeLabel = (name: string, range: string): string => (/\d{1,2}:\d{2}/.test(name) ? '' : range)
 
 /** Preferencia de interfaz: última plantilla de turno elegida para un viaje (localStorage, tolera storage no disponible). */
 const LAST_SHIFT_TEMPLATE_KEY = 'taurus.lastShiftTemplate'

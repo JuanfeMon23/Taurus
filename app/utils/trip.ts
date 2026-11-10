@@ -33,13 +33,15 @@ export interface TripFields {
   bonus?: number | null
   origin?: string | null
   destination?: string | null
+  /** Turno del día al que pertenece el viaje; obligatorio. */
+  shiftId?: string | null
 }
 
-export type TripErrors = Partial<Record<'startTime' | 'endTime' | 'distanceKm' | 'amount' | 'bonus', string>>
+export type TripErrors = Partial<Record<'startTime' | 'endTime' | 'distanceKm' | 'amount' | 'bonus' | 'shiftId', string>>
 
 const blank = (value: unknown) => value === null || value === undefined || value === ''
 
-/** Errores legibles por campo; objeto vacío = fila válida. Obligatorios: inicio, fin, distancia ≥ 0 y monto > 0. */
+/** Errores legibles por campo; objeto vacío = fila válida. Obligatorios: inicio, fin, distancia ≥ 0 y monto > 0 y turno. */
 export function validateTrip(fields: TripFields): TripErrors {
   const errors: TripErrors = {}
   if (blank(fields.startTime)) errors.startTime = 'Falta la hora de recogida'
@@ -54,6 +56,7 @@ export function validateTrip(fields: TripFields): TripErrors {
     if (typeof fields.bonus !== 'number' || !Number.isFinite(fields.bonus)) errors.bonus = 'Bonus inválido'
     else if (fields.bonus < 0) errors.bonus = 'El bonus no puede ser negativo'
   }
+  if (blank(fields.shiftId)) errors.shiftId = 'Elige el turno del viaje'
   return errors
 }
 

@@ -17,6 +17,8 @@ class Service(SyncMixin, Base):
         CheckConstraint("bonus >= 0", name="bonus_non_negative"),
         CheckConstraint("commission >= 0", name="commission_non_negative"),
         CheckConstraint("commission_vat >= 0", name="commission_vat_non_negative"),
+        # En la BD (migracion 0013) es NOT VALID: no valida los viajes historicos sin turno.
+        CheckConstraint("deleted OR shift_id IS NOT NULL", name="shift_required"),
         Index("ix_services_date", "date"),
         Index("ix_services_method", "method"),
         Index("ix_services_shift_id", "shift_id"),

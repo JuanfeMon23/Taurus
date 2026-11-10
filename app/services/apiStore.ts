@@ -1,4 +1,4 @@
-import { unknownCatalogCodeMessage } from '../utils/catalogErrors'
+import { missingShiftMessage, unknownCatalogCodeMessage } from '../utils/catalogErrors'
 import { emptySnapshot, type Snapshot, type Store } from './types'
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>
@@ -16,6 +16,8 @@ async function readableError(response: Response): Promise<string> {
   } catch { /* cuerpo no JSON */ }
   if (response.status === 422) {
     if (body?.code === 'unknown_catalog_code') return unknownCatalogCodeMessage(body.details)
+    const missingShift = missingShiftMessage(body?.details)
+    if (missingShift) return missingShift
     const messages = Array.isArray(body?.details) ? body.details.map((detail: any) => detail?.mensaje).filter(Boolean) : []
     if (messages.length) return messages.join('. ')
     if (typeof body?.message === 'string') return body.message
