@@ -2,7 +2,7 @@ import { emptyCatalogs, type Catalogs } from '../services/types'
 import { activeEntries, defaultMethodId } from '../utils/catalogs'
 
 /**
- * Catálogos (medios de pago, tipos de movimiento, categorías de gasto) compartidos por todas las pantallas.
+ * Catálogos (medios de pago, tipos de movimiento, categorías de gasto, modos de tarifa) compartidos por todas las pantallas.
  * Cada pantalla llama a `refreshCatalogs()` al montarse y al reactivarse (KeepAlive) para ver lo editado en Tarifas.
  */
 export function useCatalogs() {
@@ -19,6 +19,7 @@ export function useCatalogs() {
     activeMovementTypes: computed(() => activeEntries(catalogs.value.movementTypes)),
     activeFundTypes: computed(() => activeEntries(catalogs.value.fundMovementTypes)),
     activeExpenseCategories: computed(() => activeEntries(catalogs.value.expenseCategories)),
+    activeRateModes: computed(() => activeEntries(catalogs.value.rateModes)),
     defaultMethod: computed(() => defaultMethodId(catalogs.value.paymentMethods) ?? ''),
   }
 }

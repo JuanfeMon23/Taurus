@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import CheckConstraint, Date, DateTime, Index, Numeric, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db.base import Base, SyncMixin
+from app.core.db.base import Base, SyncMixin, catalog_fk
 
 
 class CashDay(SyncMixin, Base):
@@ -30,15 +30,19 @@ class Movement(SyncMixin, Base):
     __table_args__ = (
         CheckConstraint("amount >= 0", name="amount_non_negative"),
         Index("ix_movements_date", "date"),
+        Index("ix_movements_type", "type"),
+        Index("ix_movements_method", "method"),
+        Index("ix_movements_category_id", "category_id"),
     )
 
     date: Mapped[date] = mapped_column(Date)
-    type: Mapped[str] = mapped_column(Text)
+    type: Mapped[str] = mapped_column(Text, catalog_fk("movement_types"))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str | None] = mapped_column(Text)
-    # Sin FK a los catálogos (type, method, category_id): sync LWW por registro.
-    category_id: Mapped[str | None] = mapped_column(Text)
-    method: Mapped[str] = mapped_column(Text, server_default=text("'cash'"))
+    category_id: Mapped[str | None] = mapped_column(Text, catalog_fk("expense_categories"))
+    method: Mapped[str] = mapped_column(
+        Text, catalog_fk("payment_methods"), server_default=text("'cash'")
+    )
 
 
 class DepositMovement(SyncMixin, Base):
@@ -58,7 +62,7 @@ class DepositMovement(SyncMixin, Base):
 class FundMovement(SyncMixin, Base):
     """Fondo por categoría de costo: 'transfer' = envío al fondo, 'spend' = gasto pagado con él.
 
-    `category_id` sin FK: el sync LWW por registro puede traer el movimiento antes que su categoría.
+    `type` y `category_id` son FK diferidas (a `fund_movement_types` y `categories`).
     """
 
     __tablename__ = "fund_movements"
@@ -66,10 +70,11 @@ class FundMovement(SyncMixin, Base):
         CheckConstraint("amount >= 0", name="amount_non_negative"),
         Index("ix_fund_movements_date", "date"),
         Index("ix_fund_movements_category_id", "category_id"),
+        Index("ix_fund_movements_type", "type"),
     )
 
     date: Mapped[date] = mapped_column(Date)
-    category_id: Mapped[str] = mapped_column(Text)
-    type: Mapped[str] = mapped_column(Text)
+    category_id: Mapped[str] = mapped_column(Text, catalog_fk("categories"))
+    type: Mapped[str] = mapped_column(Text, catalog_fk("fund_movement_types"))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str | None] = mapped_column(Text)

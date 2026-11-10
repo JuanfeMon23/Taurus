@@ -1,7 +1,7 @@
 import { computeDay, type Category } from './calc'
 import { dayNet, sumCommission } from './commission'
 import { formatDuration, sumDistance, tripMinutes, tripTotal } from './trip'
-import type { Service } from '../services/types'
+import type { RateMode, Service } from '../services/types'
 
 /** Lógica pura de los viajes de un día: alta/edición/baja, orden, totales y resumen para la lista. */
 
@@ -58,8 +58,8 @@ export function extraKmFrom(totalKm: number, trips: Service[]): number {
 }
 
 /** `km` es el total del día (viajes + extra), base de los costos. */
-export function dayTotals(trips: Service[], km: number, categories: Category[]): DayTotals {
-  const dayResult = computeDay({ services: trips.map(tripTotal), km, categories })
+export function dayTotals(trips: Service[], km: number, categories: Category[], rateModes: RateMode[]): DayTotals {
+  const dayResult = computeDay({ services: trips.map(tripTotal), km, categories, rateModes })
   const { commission, commissionVat } = sumCommission(trips)
   return {
     count: trips.length, tripKm: sumDistance(trips), km, gross: dayResult.gross,

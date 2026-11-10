@@ -1,5 +1,5 @@
 // Servidor local de la PWA (sin dependencias): sirve .output/public en http://localhost:4321.
-// El puerto es fijo a propósito: los datos, la instalación de la PWA y el login de Google dependen del origen exacto.
+// El puerto es fijo a propósito: los datos, la instalación de la PWA dependen del origen exacto.
 // (3000 lo usa otro proyecto local; por eso 4321.)
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'

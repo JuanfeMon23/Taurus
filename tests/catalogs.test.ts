@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activeEntries, catalogEntryInUse, defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, slugifyCode, sortCatalog } from '../app/utils/catalogs'
+import { activeEntries, catalogEntryInUse, defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, slugifyCode, sortCatalog, withReferencedCatalogs } from '../app/utils/catalogs'
 import { emptySnapshot } from '../app/services/types'
 import { testCatalogs } from './fixtures/catalogs'
 
@@ -92,5 +92,49 @@ describe('catalogEntryInUse', () => {
     expect(catalogEntryInUse(snapshot, 'paymentMethods', 'nequi')).toBe(false)
     expect(catalogEntryInUse(snapshot, 'expenseCategories', 'varios')).toBe(false)
     expect(catalogEntryInUse(snapshot, 'movementTypes', 'deposit')).toBe(false)
+  })
+})
+
+describe('catalogEntryInUse con modos de tarifa', () => {
+  const snapshot = {
+    ...emptySnapshot(),
+    categories: [
+      { id: 'c1', name: 'Seguro', rateMode: 'per-km-flat', ratePerKm: 18, active: true, updatedAt: 't' },
+      { id: 'c2', name: 'Viejo', rateMode: 'derived', active: true, updatedAt: 't', deleted: true },
+    ],
+  }
+  it('un modo usado por una categoría viva solo se desactiva', () => {
+    expect(catalogEntryInUse(snapshot, 'rateModes', 'per-km-flat')).toBe(true)
+  })
+  it('una categoría con lápida no cuenta como uso', () => {
+    expect(catalogEntryInUse(snapshot, 'rateModes', 'derived')).toBe(false)
+  })
+})
+
+describe('withReferencedCatalogs', () => {
+  const rateMode = { id: 'per-km-flat', name: 'Fijo', usesRatePerKm: true, usesCostInterval: false, sortOrder: 2, active: true, updatedAt: 't' }
+  const method = { id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: 't' }
+  const state = { ...emptySnapshot(), rateModes: [rateMode], paymentMethods: [method] }
+  const dirtyCategory = { id: 'c1', name: 'Seguro', rateMode: 'per-km-flat', ratePerKm: 18, active: true, updatedAt: 't' }
+
+  it('agrega al mismo PUT el modo que usa la categoría sucia', () => {
+    const result = withReferencedCatalogs(state, { categories: [dirtyCategory] })
+    expect(result.categories).toEqual([dirtyCategory])
+    expect(result.rateModes).toEqual([rateMode])
+  })
+  it('agrega el medio de pago de servicios y movimientos sin repetirlo', () => {
+    const changes = {
+      services: [{ id: 's1', date: '2026-11-01', amount: 1, method: 'cash', updatedAt: 't' }],
+      movements: [{ id: 'm1', date: '2026-11-01', type: 'x', amount: 1, method: 'cash', updatedAt: 't' }],
+    }
+    expect(withReferencedCatalogs(state, changes).paymentMethods).toEqual([method])
+  })
+  it('no repite una entrada que ya viaja en los cambios ni toca lo que no se usa', () => {
+    const changes = { categories: [dirtyCategory], rateModes: [{ ...rateMode, name: 'Editado' }] }
+    expect(withReferencedCatalogs(state, changes).rateModes).toEqual([{ ...rateMode, name: 'Editado' }])
+    expect(withReferencedCatalogs(state, { shifts: [] })).toEqual({ shifts: [] })
+  })
+  it('un código que el estado local no tiene se deja al backend (no inventa entradas)', () => {
+    expect(withReferencedCatalogs(state, { categories: [{ ...dirtyCategory, rateMode: 'nope' }] }).rateModes).toBeUndefined()
   })
 })

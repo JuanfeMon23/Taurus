@@ -102,8 +102,8 @@ const sorted = computed(() => sortTrips(trips.value))
 // Viajes total o parcialmente fuera de turno (solo si el día tiene turnos); el turno en curso cuenta hasta ahora en el día de hoy.
 const outOfShiftIds = computed(() => new Set(dayActivity(trips.value, shifts.value, activityNow(date.value, todayISO(), clockNow())).outOfShiftTrips))
 const totalKm = computed(() => dayKm(trips.value, extraKm.value ?? 0))
-const totals = computed(() => dayTotals(trips.value, totalKm.value, categories.value))
-const result = computed(() => computeDay({ services: trips.value.map(tripTotal), km: totalKm.value, categories: categories.value }))
+const totals = computed(() => dayTotals(trips.value, totalKm.value, categories.value, catalogs.value.rateModes))
+const result = computed(() => computeDay({ services: trips.value.map(tripTotal), km: totalKm.value, categories: categories.value, rateModes: catalogs.value.rateModes }))
 const costShare = (amount: number) => (result.value.totalCost > 0 ? Math.max((amount / result.value.totalCost) * 100, 4) : 0)
 const margin = computed(() => (totals.value.gross > 0 ? Math.round((totals.value.net / totals.value.gross) * 100) : 0))
 

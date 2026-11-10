@@ -37,7 +37,7 @@ export const movementSign = (types: SignedEntry[], code: string): 1 | -1 | 0 => 
 export const movementTypeHasCategory = (types: MovementTypeEntry[], code: string): boolean => types.find(type => type.id === code)?.hasCategory ?? false
 
 /** ¿Algún registro vivo usa este código? Si sí, la entrada solo se puede desactivar, no borrar. */
-export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements'>, kind: CatalogKind, id: string): boolean {
+export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements' | 'categories'>, kind: CatalogKind, id: string): boolean {
   const alive = <Record extends { deleted?: boolean }>(records: Record[]) => records.filter(record => !record.deleted)
   switch (kind) {
     case 'paymentMethods':
@@ -48,5 +48,37 @@ export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movemen
       return alive(snapshot.fundMovements).some(movement => movement.type === id)
     case 'expenseCategories':
       return alive(snapshot.movements).some(movement => movement.categoryId === id)
+    case 'rateModes':
+      return alive(snapshot.categories).some(category => category.rateMode === id)
   }
+}
+
+/** Códigos de catálogo que cada colección de registros guarda (sin llave foránea); el backend los valida en el PUT. */
+const CATALOG_REFERENCES: { collection: 'categories' | 'services' | 'movements' | 'fundMovements'; field: string; kind: CatalogKind }[] = [
+  { collection: 'categories', field: 'rateMode', kind: 'rateModes' },
+  { collection: 'services', field: 'method', kind: 'paymentMethods' },
+  { collection: 'movements', field: 'method', kind: 'paymentMethods' },
+  { collection: 'movements', field: 'type', kind: 'movementTypes' },
+  { collection: 'movements', field: 'categoryId', kind: 'expenseCategories' },
+  { collection: 'fundMovements', field: 'type', kind: 'fundMovementTypes' },
+]
+
+/**
+ * Cambios a enviar en un mismo PUT: los registros sucios más las entradas de catálogo que usan y que ya existen en el estado local
+ * (el backend rechaza con 422 un código que no conoce, y el catálogo y el registro pueden ir juntos en cualquier orden).
+ * Lo que ya viaja en `changes` no se repite.
+ */
+export function withReferencedCatalogs(state: Snapshot, changes: Partial<Snapshot>): Partial<Snapshot> {
+  const result: Partial<Snapshot> = { ...changes }
+  for (const { collection, field, kind } of CATALOG_REFERENCES) {
+    for (const record of (changes[collection] ?? []) as unknown as Record<string, unknown>[]) {
+      const code = record[field]
+      if (record.deleted || typeof code !== 'string') continue
+      const sending = (result[kind] ?? []) as { id: string }[]
+      if (sending.some(entry => entry.id === code)) continue
+      const entry = (state[kind] as { id: string }[]).find(candidate => candidate.id === code)
+      if (entry) (result as Record<string, unknown>)[kind] = [...sending, entry]
+    }
+  }
+  return result
 }

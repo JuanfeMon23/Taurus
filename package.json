@@ -7,7 +7,6 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "build:web": "nuxt generate",
-    "build:native": "cross-env TAURUS_TARGET=native nuxt generate && cap sync android",
     "local": "nuxt generate && node scripts/serve.mjs",
     "serve:local": "node scripts/serve.mjs",
     "preview": "nuxt preview",
@@ -16,9 +15,6 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
-    "@capacitor-community/sqlite": "^8.1.1",
-    "@capacitor/core": "^8.5.3",
-    "@capgo/capacitor-social-login": "8.5.18",
     "echarts": "^6.1.0",
     "lucide-vue-next": "^1.0.0",
     "nuxt": "^4.6.1",
@@ -27,10 +23,7 @@
     "vue-router": "^5.4.0"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.5.3",
-    "@capacitor/cli": "^8.5.3",
     "@vite-pwa/nuxt": "^1.1.1",
-    "cross-env": "^10.1.0",
     "typescript": "^5.9.3",
     "vitest": "^5.0.4",
     "vue-tsc": "^3.3.13"

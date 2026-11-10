@@ -20,4 +20,8 @@ export const testCatalogs = (): Catalogs => ({
     { id: 'parqueadero', name: 'Parqueadero', sortOrder: 1, active: true },
     { id: 'varios', name: 'Varios', sortOrder: 2, active: true },
   ],
+  rateModes: [
+    { id: 'direct', name: 'Valor por km', usesRatePerKm: true, usesCostInterval: false, sortOrder: 0, active: true },
+    { id: 'derived', name: 'Costo total cada X km', usesRatePerKm: false, usesCostInterval: true, sortOrder: 1, active: true },
+  ],
 })

@@ -22,6 +22,7 @@ TABLES = {
     "movement_types",
     "fund_movement_types",
     "expense_categories",
+    "rate_modes",
 }
 
 
@@ -268,5 +269,90 @@ async def test_0009_has_category_default_backfill_and_roundtrip(
     finally:
         async with engine.begin() as conn:
             await conn.execute(text("delete from movement_types where id = 't9'"))
+        alembic("upgrade", "head")
+        await engine.dispose()
+
+
+async def test_0010_seeds_rate_modes_and_roundtrips(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.connect() as conn:
+            modes = {
+                r.id: (r.name, r.uses_rate_per_km, r.uses_cost_interval, r.sort_order)
+                for r in await conn.execute(text("select * from rate_modes"))
+            }
+            fks = (
+                (
+                    await conn.execute(
+                        text(
+                            "select conname from pg_constraint where contype = 'f' "
+                            "and condeferrable and condeferred"
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        assert modes["direct"] == ("Valor por km", True, False, 1)
+        assert modes["derived"] == ("Costo cada X km", False, True, 2)
+        assert {
+            "fk_categories_rate_mode_rate_modes",
+            "fk_services_method_payment_methods",
+            "fk_movements_method_payment_methods",
+            "fk_movements_type_movement_types",
+            "fk_movements_category_id_expense_categories",
+            "fk_fund_movements_type_fund_movement_types",
+        } <= set(fks)
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into rate_modes (id, name, deleted) values ('custom', 'Propio', false)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "insert into categories (id, name, rate_mode, deleted) "
+                    "values ('c10', 'Seguro', 'custom', false)"
+                )
+            )
+        alembic("downgrade", "0009")
+        assert "rate_modes" not in await _tables(test_url)
+        async with engine.connect() as conn:
+            mode = (
+                await conn.execute(text("select rate_mode from categories where id = 'c10'"))
+            ).scalar_one()
+            check = await conn.scalar(
+                text("select count(*) from pg_constraint where conname = 'ck_categories_rate_mode'")
+            )
+        assert mode == "direct" and check == 1
+        alembic("upgrade", "head")
+        assert "rate_modes" in await _tables(test_url)
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from categories where id = 'c10'"))
+        alembic("upgrade", "head")
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from rate_modes where id = 'custom'"))
+        await engine.dispose()
+
+
+async def test_0011_fund_category_fk_roundtrip(test_url: str, alembic: Callable[..., None]) -> None:
+    query = text(
+        "select count(*) from pg_constraint where conname = "
+        "'fk_fund_movements_category_id_categories' and condeferrable and condeferred"
+    )
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.connect() as conn:
+            assert await conn.scalar(query) == 1
+        alembic("downgrade", "0010")
+        async with engine.connect() as conn:
+            assert await conn.scalar(query) == 0
+        alembic("upgrade", "head")
+        async with engine.connect() as conn:
+            assert await conn.scalar(query) == 1
+    finally:
         alembic("upgrade", "head")
         await engine.dispose()

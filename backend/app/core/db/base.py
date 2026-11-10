@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, MetaData, Text, func, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, MetaData, Text, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 NAMING_CONVENTION = {
@@ -14,6 +14,12 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+def catalog_fk(table: str) -> ForeignKey:
+    """FK al código (`id`) de un catálogo, validada al commit: el PUT del snapshot (una
+    transacción) aplica los registros en orden arbitrario y el hijo puede llegar antes."""
+    return ForeignKey(f"{table}.id", deferrable=True, initially="DEFERRED")
 
 
 class SyncMixin:

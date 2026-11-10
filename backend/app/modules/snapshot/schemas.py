@@ -1,7 +1,7 @@
 import re
 from datetime import date, time
 from decimal import Decimal
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Self
 
 from pydantic import (
     AfterValidator,
@@ -111,7 +111,7 @@ class DateIdRecord(SyncRecord):
 
 class CategoryRec(SyncRecord):
     name: str
-    rate_mode: Literal["direct", "derived"]
+    rate_mode: Code
     rate_per_km: NonNeg | None = None
     total_cost: NonNeg | None = None
     interval_km: Positive | None = None
@@ -237,6 +237,11 @@ class SignedCatalogRec(CatalogRec):
     sign: Sign
 
 
+class RateModeRec(CatalogRec):
+    uses_rate_per_km: Annotated[bool, _none_to_default(False)] = False
+    uses_cost_interval: Annotated[bool, _none_to_default(False)] = False
+
+
 class MovementTypeRec(SignedCatalogRec):
     has_category: Annotated[bool, _none_to_default(False)] = False
 
@@ -258,6 +263,7 @@ class SnapshotWrite(CamelModel):
     movement_types: list[MovementTypeRec] = []
     fund_movement_types: list[SignedCatalogRec] = []
     expense_categories: list[CatalogRec] = []
+    rate_modes: list[RateModeRec] = []
 
 
 class SnapshotRead(SnapshotWrite):

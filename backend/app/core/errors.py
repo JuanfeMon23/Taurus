@@ -25,6 +25,25 @@ MESSAGES = {
 }
 
 
+class ApiError(Exception):
+    """Error de negocio con el formato `{code, message, details}`; los módulos lo subclasean."""
+
+    status_code = 422
+    code = "error"
+    message = "Error"
+
+    def __init__(self, details: list[dict[str, str]] | None = None) -> None:
+        super().__init__(self.message)
+        self.details = details or []
+
+
+async def api_error_handler(_: Request, exc: ApiError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"code": exc.code, "message": exc.message, "details": exc.details},
+    )
+
+
 def _message(error: dict[str, Any]) -> str:
     template = MESSAGES.get(error["type"])
     if template:
@@ -50,4 +69,5 @@ async def validation_handler(_: Request, exc: RequestValidationError) -> JSONRes
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(ApiError, api_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_handler)  # type: ignore[arg-type]

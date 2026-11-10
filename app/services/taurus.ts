@@ -1,5 +1,5 @@
 import { computeDay, type Category } from '../utils/calc'
-import { catalogEntryInUse, defaultMethodId, slugifyCode, sortCatalog } from '../utils/catalogs'
+import { catalogEntryInUse, defaultMethodId, slugifyCode, sortCatalog, withReferencedCatalogs } from '../utils/catalogs'
 import { DEFAULT_RATES, dayNet, sumCommission, type CommissionRates } from '../utils/commission'
 import { tripTotal } from '../utils/trip'
 import { sortShiftTemplates } from '../utils/shifts'
@@ -57,7 +57,7 @@ const withoutMeta = <T extends Meta>({ updatedAt: _updatedAt, deleted: _deleted,
 
 const nextSortOrder = (entries: { sortOrder: number }[]) => entries.reduce((highest, entry) => Math.max(highest, entry.sortOrder + 1), 0)
 
-const CATALOG_KINDS: CatalogKind[] = ['paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories']
+const CATALOG_KINDS: CatalogKind[] = ['paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories', 'rateModes']
 
 const methodField = (method: string | undefined) => (method ? { method } : {})
 
@@ -90,8 +90,10 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
   const loadState = async () => (state ??= await store.load())
 
   async function put(changes: Partial<Snapshot>, silent = false) {
-    upsert(await loadState(), changes)
-    await store.save(changes)
+    const current = await loadState()
+    upsert(current, changes)
+    // Los catálogos que usan los registros viajan en el mismo PUT: el backend rechaza un código que aún no conoce.
+    await store.save(withReferencedCatalogs(current, changes))
     if (!silent) opts.onChange?.()
   }
 
@@ -291,6 +293,7 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       if (snapshot.categories.length === 0) await put({ categories: structuredClone(SEED) }, true)
       // Solo un almacén local nuevo: con el backend los catálogos ya vienen sembrados desde la BD.
       if (CATALOG_KINDS.every(kind => snapshot[kind].length === 0)) await put(structuredClone(SEED_CATALOGS), true)
+      else if (snapshot.rateModes.length === 0) await put({ rateModes: structuredClone(SEED_CATALOGS.rateModes) }, true)
     },
 
     /** Guarda el día congelando las tarifas de las categorías activas ahora. */
@@ -303,7 +306,7 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
         if (!resolved) throw new ApiError('No hay medios de pago; agrega uno en Tarifas > Catálogos.')
         return resolved
       }
-      const { costs } = computeDay({ services: input.services.map(tripTotal), km: input.km, categories })
+      const { costs } = computeDay({ services: input.services.map(tripTotal), km: input.km, categories, rateModes: live(snapshot.rateModes) })
       const previous = snapshot.days.find(day => day.id === input.date && !day.deleted)
       const meta: DayMeta = { id: input.date, date: input.date, km: input.km, note: input.note, costs, updatedAt: timestamp }
       const changedMeta = !previous || !same({ ...previous, updatedAt: '' }, { ...meta, updatedAt: '' })

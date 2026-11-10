@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { upsertTrip, removeTrip, dayTotals, dayKm, extraKmFrom, sortTrips, tripSummary } from '../app/utils/dayTrips'
 import type { Category } from '../app/utils/calc'
+import { testCatalogs } from './fixtures/catalogs'
 
 const buildTrip = (overrides: Record<string, unknown> = {}) => ({ id: 'a', amount: 10000, method: 'cash' as const, startTime: '08:00', endTime: '08:30', distanceKm: 5, ...overrides })
 
@@ -44,25 +45,26 @@ describe('sortTrips', () => {
 })
 
 describe('dayTotals', () => {
+  const { rateModes } = testCatalogs()
   const categories: Category[] = [{ id: 'g', name: 'Gasolina', rateMode: 'direct', ratePerKm: 100, active: true }]
   it('suma viajes, km, bruto, costos y neto con el km del día', () => {
-    const totals = dayTotals([buildTrip({ amount: 10000 }), buildTrip({ id: 'b', amount: 5000 })], 20, categories)
+    const totals = dayTotals([buildTrip({ amount: 10000 }), buildTrip({ id: 'b', amount: 5000 })], 20, categories, rateModes)
     expect(totals).toMatchObject({ count: 2, tripKm: 10, km: 20, gross: 15000, totalCost: 2000, net: 13000 })
   })
   it('el bruto incluye el bonus y se informa el bonus del día', () => {
-    const totals = dayTotals([buildTrip({ amount: 10000, bonus: 2000 }), buildTrip({ id: 'b', amount: 5000 })], 20, categories)
+    const totals = dayTotals([buildTrip({ amount: 10000, bonus: 2000 }), buildTrip({ id: 'b', amount: 5000 })], 20, categories, rateModes)
     expect(totals).toMatchObject({ gross: 17000, bonus: 2000, totalCost: 2000, net: 15000 })
   })
   it('descuenta comisión e IVA del neto y los informa', () => {
-    const totals = dayTotals([buildTrip({ amount: 10000, commission: 950, commissionVat: 180.5 }), buildTrip({ id: 'b', amount: 5000, isIndrive: false })], 20, categories)
+    const totals = dayTotals([buildTrip({ amount: 10000, commission: 950, commissionVat: 180.5 }), buildTrip({ id: 'b', amount: 5000, isIndrive: false })], 20, categories, rateModes)
     expect(totals).toMatchObject({ gross: 15000, totalCost: 2000, commission: 950, commissionVat: 180.5 })
     expect(totals.net).toBeCloseTo(11869.5, 6)
   })
   it('día vacío da ceros', () => {
-    expect(dayTotals([], 0, categories)).toMatchObject({ count: 0, gross: 0, totalCost: 0, net: 0 })
+    expect(dayTotals([], 0, categories, rateModes)).toMatchObject({ count: 0, gross: 0, totalCost: 0, net: 0 })
   })
   it('neto negativo si el costo supera el bruto', () => {
-    expect(dayTotals([buildTrip({ amount: 100 })], 50, categories).net).toBe(-4900)
+    expect(dayTotals([buildTrip({ amount: 100 })], 50, categories, rateModes).net).toBe(-4900)
   })
 })
 

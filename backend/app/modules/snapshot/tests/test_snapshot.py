@@ -55,6 +55,7 @@ async def test_get_devuelve_todas_las_colecciones(client: AsyncClient) -> None:
         "movementTypes",
         "fundMovementTypes",
         "expenseCategories",
+        "rateModes",
     }
 
 
@@ -245,11 +246,11 @@ async def test_dia_con_id_distinto_de_fecha_422(client: AsyncClient) -> None:
     assert (await put(client, {"days": [day]})).status_code == 422
 
 
-async def test_metodo_vacio_422_y_codigo_desconocido_se_acepta(client: AsyncClient) -> None:
+async def test_metodo_vacio_y_codigo_desconocido_422(client: AsyncClient) -> None:
     assert (await put(client, {"services": [svc(method="")]})).status_code == 422
     response = await put(client, {"services": [svc(method="card")]})
-    assert response.status_code == 200
-    assert (await get_col(client, "services"))[0]["method"] == "card"
+    assert response.status_code == 422
+    assert response.json()["code"] == "unknown_catalog_code"
 
 
 def cash(**overrides: Any) -> dict[str, Any]:
@@ -406,6 +407,11 @@ def fund(**overrides: Any) -> dict[str, Any]:
     }
 
 
+def fund_put(*funds: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    """PUT con movimientos de caja y la categoría `c1` a la que apuntan (FK diferida)."""
+    return {"categories": [category()], "fundMovements": list(funds), **extra}
+
+
 def movement(**overrides: Any) -> dict[str, Any]:
     return {
         "id": "m1",
@@ -418,7 +424,7 @@ def movement(**overrides: Any) -> dict[str, Any]:
 
 
 async def test_fund_movements_put_y_get(client: AsyncClient) -> None:
-    response = await put(client, {"fundMovements": [fund(note="comida")]})
+    response = await put(client, fund_put(fund(note="comida")))
     assert response.json()["applied"]["fundMovements"] == 1
     record = (await get_col(client, "fundMovements"))[0]
     assert record["id"] == "f1" and record["categoryId"] == "c1"
@@ -428,12 +434,12 @@ async def test_fund_movements_put_y_get(client: AsyncClient) -> None:
 
 
 async def test_fund_movements_nota_ausente_se_omite(client: AsyncClient) -> None:
-    await put(client, {"fundMovements": [fund(type="spend")]})
+    await put(client, fund_put(fund(type="spend")))
     assert (await get_col(client, "fundMovements"))[0].get("note") is None
 
 
 async def test_fund_movements_lww_y_lapida(client: AsyncClient) -> None:
-    await put(client, {"fundMovements": [fund(amount=20, updatedAt=T2)]})
+    await put(client, fund_put(fund(amount=20, updatedAt=T2)))
     response = await put(client, {"fundMovements": [fund(amount=99)]})
     assert response.json()["skipped"]["fundMovements"] == 1
     assert (await get_col(client, "fundMovements"))[0]["amount"] == 20
@@ -442,13 +448,15 @@ async def test_fund_movements_lww_y_lapida(client: AsyncClient) -> None:
     assert (await get_col(client, "fundMovements"))[0]["deleted"] is True
 
 
-async def test_fund_movements_tipo_vacio_422_y_desconocido_se_acepta(
+async def test_fund_movements_tipo_vacio_y_desconocido_422(
     client: AsyncClient,
 ) -> None:
     response = await put(client, {"fundMovements": [fund(type="")]})
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
-    assert (await put(client, {"fundMovements": [fund(type="gift")]})).status_code == 200
+    unknown = await put(client, fund_put(fund(type="gift")))
+    assert unknown.status_code == 422
+    assert unknown.json()["code"] == "unknown_catalog_code"
 
 
 async def test_fund_movements_monto_negativo_422(client: AsyncClient) -> None:
@@ -456,8 +464,8 @@ async def test_fund_movements_monto_negativo_422(client: AsyncClient) -> None:
 
 
 async def test_movimiento_categoria_put_y_get(client: AsyncClient) -> None:
-    await put(client, {"movements": [movement(categoryId="gasolina")]})
-    assert (await get_col(client, "movements"))[0]["categoryId"] == "gasolina"
+    await put(client, {"movements": [movement(categoryId="comida")]})
+    assert (await get_col(client, "movements"))[0]["categoryId"] == "comida"
 
 
 async def test_movimiento_categoria_ausente_o_null_se_omite(client: AsyncClient) -> None:
@@ -477,14 +485,15 @@ async def test_movimiento_metodo_transfer_y_lww(client: AsyncClient) -> None:
     assert (await get_col(client, "movements"))[0]["method"] == "transfer"
 
 
-async def test_movimiento_metodo_o_tipo_vacio_422_y_desconocido_se_acepta(
+async def test_movimiento_metodo_o_tipo_vacio_y_desconocido_422(
     client: AsyncClient,
 ) -> None:
     for field in ("method", "type"):
         assert (await put(client, {"movements": [movement(**{field: ""})]})).status_code == 422
-    assert (
-        await put(client, {"movements": [movement(method="card", type="x")]})
-    ).status_code == 200
+    for field in ("method", "type"):
+        unknown = await put(client, {"movements": [movement(**{field: "zz"})]})
+        assert unknown.status_code == 422
+        assert unknown.json()["details"][0]["campo"] == f"movements.{field}"
 
 
 def shift(**overrides: Any) -> dict[str, Any]:
@@ -664,3 +673,59 @@ async def test_tipo_de_movimiento_has_category_ausente_o_nulo_es_false(client: A
     stored = {rec["id"]: rec for rec in await get_col(client, "movementTypes")}
     assert stored["tst-sin"]["hasCategory"] is False
     assert stored["tst-nulo"]["hasCategory"] is False
+
+
+def rate_mode(**overrides: Any) -> dict[str, Any]:
+    return {"id": "fixed", "name": "Fija", "updatedAt": T1, **overrides}
+
+
+def category(**overrides: Any) -> dict[str, Any]:
+    return {"id": "c1", "name": "Gas", "rateMode": "direct", "updatedAt": T1, **overrides}
+
+
+async def test_rate_modes_semillas_con_banderas_en_camelcase(client: AsyncClient) -> None:
+    modes = {mode["id"]: mode for mode in await get_col(client, "rateModes")}
+    assert modes["direct"]["usesRatePerKm"] is True
+    assert modes["derived"]["usesCostInterval"] is True
+
+
+async def test_rate_modes_ida_y_vuelta(client: AsyncClient) -> None:
+    mode = rate_mode(usesRatePerKm=True, usesCostInterval=False, sortOrder=5)
+    assert (await put(client, {"rateModes": [mode]})).json()["applied"]["rateModes"] == 1
+    stored = {item["id"]: item for item in await get_col(client, "rateModes")}["fixed"]
+    assert stored["usesRatePerKm"] is True
+    assert stored["usesCostInterval"] is False
+    assert stored["sortOrder"] == 5
+    assert stored["name"] == "Fija"
+
+
+async def test_rate_mode_sin_nombre_422(client: AsyncClient) -> None:
+    assert (await put(client, {"rateModes": [rate_mode(name=" ")]})).status_code == 422
+
+
+async def test_categoria_con_modo_creado_en_el_mismo_put_en_cualquier_orden(
+    client: AsyncClient,
+) -> None:
+    body = {"categories": [category(rateMode="fixed")], "rateModes": [rate_mode()]}
+    response = await put(client, body)
+    assert response.status_code == 200
+    assert (await get_col(client, "categories"))[0]["rateMode"] == "fixed"
+
+
+async def test_codigo_inexistente_devuelve_422_sin_aplicar_nada(client: AsyncClient) -> None:
+    body = {"categories": [category(rateMode="nope")], "services": [svc()]}
+    response = await put(client, body)
+    assert response.status_code == 422
+    error = response.json()
+    assert error["code"] == "unknown_catalog_code"
+    assert error["details"] == [
+        {"campo": "categories.rateMode", "mensaje": "Código de catálogo desconocido: nope"}
+    ]
+    assert await get_col(client, "categories") == []
+    assert await get_col(client, "services") == []
+
+
+async def test_servicio_con_metodo_desconocido_devuelve_422(client: AsyncClient) -> None:
+    response = await put(client, {"services": [svc(method="card")]})
+    assert response.status_code == 422
+    assert response.json()["details"][0]["campo"] == "services.method"

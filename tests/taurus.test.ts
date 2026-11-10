@@ -286,3 +286,35 @@ describe('taurus: depósito', () => {
     expect((await taurus.repo.listCatalogs()).expenseCategories.map(category => category.id)).toContain('varios')
   })
 })
+
+describe('modos de tarifa en catálogo', () => {
+  it('siembra direct y derived en un almacén nuevo', async () => {
+    const taurus = await setup()
+    const { rateModes } = await taurus.repo.listCatalogs()
+    expect(rateModes.map(mode => [mode.id, mode.usesRatePerKm, mode.usesCostInterval])).toEqual([['direct', true, false], ['derived', false, true]])
+  })
+
+  it('un modo nuevo de valor por km calcula el costo del día (seguro 18 $/km)', async () => {
+    const taurus = await setup()
+    await taurus.repo.saveCatalogEntry('rateModes', { name: 'Fijo por km', usesRatePerKm: true, usesCostInterval: false })
+    await taurus.repo.saveCategory({ name: 'Seguro', rateMode: 'fijo-por-km', ratePerKm: 18, active: true })
+    const day = await taurus.saveDay({ date: '2026-11-10', km: 100, services: [{ amount: 100000 }] })
+    expect(day.costs.find(cost => cost.name === 'Seguro')!.amount).toBe(1800)
+  })
+
+  it('un modo en uso por una categoría no se puede borrar', async () => {
+    const taurus = await setup()
+    await expect(taurus.repo.deleteCatalogEntry('rateModes', 'direct')).rejects.toThrow(ApiError)
+  })
+
+  it('el PUT de una categoría incluye el modo que usa', async () => {
+    const saved: Record<string, unknown>[] = []
+    const memory = createMemoryStore()
+    const taurus = createTaurus({ load: () => memory.load(), save: async changes => { saved.push(changes); await memory.save(changes) } })
+    await taurus.init()
+    saved.length = 0
+    await taurus.repo.saveCategory({ name: 'Peaje', rateMode: 'direct', ratePerKm: 5, active: true })
+    expect(Object.keys(saved[0]!).sort()).toEqual(['categories', 'rateModes'])
+    expect((saved[0]!.rateModes as { id: string }[]).map(mode => mode.id)).toEqual(['direct'])
+  })
+})

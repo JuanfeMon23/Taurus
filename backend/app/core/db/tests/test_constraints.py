@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.modules.cash.models import CashDay, DepositMovement, FundMovement, Movement
 from app.modules.catalogs.models import (
@@ -13,6 +13,7 @@ from app.modules.catalogs.models import (
     FundMovementType,
     MovementType,
     PaymentMethod,
+    RateMode,
 )
 from app.modules.categories.models import Category
 from app.modules.days.models import Day
@@ -67,7 +68,7 @@ async def test_service_accepts_trip_fields(session: AsyncSession) -> None:
     await session.flush()
 
 
-async def test_service_method_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+async def test_service_unknown_method_passes_flush_until_commit(session: AsyncSession) -> None:
     session.add(service(method="card"))
     await session.flush()
 
@@ -100,7 +101,7 @@ async def test_service_rejects_negative_bonus(session: AsyncSession) -> None:
     await assert_rejected(session, service(bonus=-1), "ck_services_bonus_non_negative")
 
 
-async def test_movement_type_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+async def test_movement_unknown_type_passes_flush_until_commit(session: AsyncSession) -> None:
     session.add(movement(type="gift"))
     await session.flush()
 
@@ -115,8 +116,13 @@ async def test_movement_rejects_negative_amount(session: AsyncSession) -> None:
     await assert_rejected(session, movement(amount=-5), "ck_movements_amount_non_negative")
 
 
-async def test_category_rejects_invalid_rate_mode(session: AsyncSession) -> None:
-    await assert_rejected(session, category(rate_mode="x"), "ck_categories_rate_mode")
+async def test_category_unknown_rate_mode_rejected_when_checked(
+    session: AsyncSession,
+) -> None:
+    session.add(category(rate_mode="x"))
+    await session.flush()
+    with pytest.raises(IntegrityError, match="fk_categories_rate_mode_rate_modes"):
+        await session.execute(text("set constraints all immediate"))
 
 
 async def test_category_rejects_zero_interval(session: AsyncSession) -> None:
@@ -289,7 +295,7 @@ async def test_movement_accepts_category_and_transfer(session: AsyncSession) -> 
     assert record.category_id == "comida" and record.method == "transfer"
 
 
-async def test_movement_method_is_free_text_validated_by_catalog(session: AsyncSession) -> None:
+async def test_movement_unknown_method_passes_flush_until_commit(session: AsyncSession) -> None:
     session.add(movement(method="card"))
     await session.flush()
 
@@ -309,7 +315,7 @@ async def test_fund_movement_accepts_valid_types(session: AsyncSession, type_: s
     await session.flush()
 
 
-async def test_fund_movement_type_is_free_text_validated_by_catalog(
+async def test_fund_movement_unknown_type_passes_flush_until_commit(
     session: AsyncSession,
 ) -> None:
     session.add(fund(type="gift"))
@@ -453,3 +459,125 @@ async def test_catalog_defaults(session: AsyncSession) -> None:
     record = await session.get(ExpenseCategory, "nueva")
     assert record is not None
     assert record.sort_order == 0 and record.active is True and record.deleted is False
+
+
+async def test_rate_modes_seeded_with_behavior_flags(session: AsyncSession) -> None:
+    direct = await session.get(RateMode, "direct")
+    derived = await session.get(RateMode, "derived")
+    assert direct is not None and derived is not None
+    assert (direct.name, direct.uses_rate_per_km, direct.uses_cost_interval) == (
+        "Valor por km",
+        True,
+        False,
+    )
+    assert (derived.name, derived.uses_rate_per_km, derived.uses_cost_interval) == (
+        "Costo cada X km",
+        False,
+        True,
+    )
+    assert direct.updated_at.year == 2000 and derived.deleted is False
+
+
+async def test_rate_mode_defaults_and_empty_name(session: AsyncSession) -> None:
+    session.add(RateMode(id="mine", name="Mía"))
+    await session.flush()
+    session.expire_all()
+    record = await session.get(RateMode, "mine")
+    assert record is not None
+    assert record.uses_rate_per_km is False and record.uses_cost_interval is False
+    assert record.active is True and record.sort_order == 0
+    await assert_rejected(session, RateMode(id="x", name="  "), "ck_rate_modes_name_not_empty")
+
+
+ORPHAN_INSERTS = [
+    ("services", "insert into services (id, date, amount, method) values ('{k}', now(), 1, 'zz')"),
+    (
+        "movements",
+        "insert into movements (id, date, type, amount, method) "
+        "values ('{k}', now(), 'expense', 1, 'zz')",
+    ),
+    ("movements", "insert into movements (id, date, type, amount) values ('{k}', now(), 'zz', 1)"),
+    (
+        "movements",
+        "insert into movements (id, date, type, amount, category_id) "
+        "values ('{k}', now(), 'expense', 1, 'zz')",
+    ),
+    (
+        "fund_movements",
+        "insert into fund_movements (id, date, category_id, type, amount) "
+        "values ('{k}', now(), 'c1', 'zz', 1)",
+    ),
+    (
+        "fund_movements",
+        "insert into fund_movements (id, date, category_id, type, amount) "
+        "values ('{k}', now(), 'zz', 'spend', 1)",
+    ),
+    ("categories", "insert into categories (id, name, rate_mode) values ('{k}', 'N', 'zz')"),
+]
+
+
+@pytest.mark.parametrize(("table", "sql"), ORPHAN_INSERTS)
+async def test_unknown_catalog_code_fails_at_commit(test_url: str, table: str, sql: str) -> None:
+    engine = create_async_engine(test_url)
+    key = f"fk-test-{table}"
+    try:
+        with pytest.raises(IntegrityError, match="fk_"):
+            async with engine.begin() as conn:
+                await conn.execute(text(sql.format(k=key)))
+        async with engine.connect() as conn:
+            assert await conn.scalar(text(f"select count(*) from {table} where id = '{key}'")) == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_child_before_catalog_in_same_transaction_commits(test_url: str) -> None:
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into services (id, date, amount, method) "
+                    "values ('fk-early', now(), 1, 'card')"
+                )
+            )
+            await conn.execute(
+                text(
+                    "insert into payment_methods (id, name, affects_cash, deleted) "
+                    "values ('card', 'Tarjeta', false, false)"
+                )
+            )
+        async with engine.connect() as conn:
+            method = await conn.scalar(text("select method from services where id = 'fk-early'"))
+        assert method == "card"
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from services where id = 'fk-early'"))
+            await conn.execute(text("delete from payment_methods where id = 'card'"))
+        await engine.dispose()
+
+
+async def test_tombstoned_catalog_row_keeps_references_valid(test_url: str) -> None:
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into payment_methods (id, name, affects_cash, deleted) "
+                    "values ('old', 'Vieja', false, false)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "insert into services (id, date, amount, method) "
+                    "values ('fk-tomb', now(), 1, 'old')"
+                )
+            )
+        async with engine.begin() as conn:
+            await conn.execute(text("update payment_methods set deleted = true where id = 'old'"))
+        async with engine.connect() as conn:
+            assert await conn.scalar(text("select count(*) from services where id='fk-tomb'")) == 1
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from services where id = 'fk-tomb'"))
+            await conn.execute(text("delete from payment_methods where id = 'old'"))
+        await engine.dispose()

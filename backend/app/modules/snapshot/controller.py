@@ -1,6 +1,9 @@
+import re
 from typing import Any
 
 from pydantic.alias_generators import to_camel
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db.base import Base
@@ -10,6 +13,7 @@ from app.modules.catalogs.models import (
     FundMovementType,
     MovementType,
     PaymentMethod,
+    RateMode,
 )
 from app.modules.categories.models import Category
 from app.modules.days.models import Day
@@ -17,10 +21,16 @@ from app.modules.services.models import Service
 from app.modules.settings.models import Setting
 from app.modules.shifts.models import Shift, ShiftTemplate
 from app.modules.snapshot import repository
+from app.modules.snapshot.exceptions import UnknownCatalogCode
 from app.modules.snapshot.schemas import SnapshotRead, SnapshotResult, SnapshotWrite
 
+FOREIGN_KEY_VIOLATION = "23503"
+KEY_DETAIL = re.compile(r"\((?P<column>\w+)\)=\((?P<value>.*?)\)")  # sin depender del idioma
+
 # colección del snapshot -> modelo
+# Orden: catálogos primero (las FK son diferidas, pero así el orden es legible).
 MODELS: dict[str, type[Base]] = {
+    "rate_modes": RateMode,
     "categories": Category,
     "days": Day,
     "services": Service,
@@ -59,6 +69,40 @@ async def get_snapshot(session: AsyncSession) -> SnapshotRead:
     return SnapshotRead.model_validate(data)
 
 
+def _unknown_code_detail(error: IntegrityError) -> dict[str, str] | None:
+    """Detalle `{campo, mensaje}` si el error es una FK de código de catálogo; si no, None."""
+    cause = getattr(error.orig, "__cause__", None) or error.orig
+    if getattr(cause, "sqlstate", None) != FOREIGN_KEY_VIOLATION:
+        return None
+    match = KEY_DETAIL.search(str(getattr(cause, "detail", "") or ""))
+    table = getattr(cause, "table_name", "") or ""
+    if not match:
+        return None
+    collection = next(
+        (to_camel(col) for col, model in MODELS.items() if model.__tablename__ == table), table
+    )  # type: ignore[attr-defined]
+    return {
+        "campo": f"{collection}.{to_camel(match['column'])}",
+        "mensaje": f"Código de catálogo desconocido: {match['value']}",
+    }
+
+
+async def _commit_checking_catalog_codes(session: AsyncSession) -> None:
+    """Valida ya las FK diferidas (el orden de los registros no importa) y confirma.
+
+    Un código inexistente deshace todo (nada parcial) y se traduce a 422.
+    """
+    try:
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        detail = _unknown_code_detail(error)
+        if detail is None:
+            raise
+        raise UnknownCatalogCode([detail]) from error
+
+
 async def apply_snapshot(session: AsyncSession, snapshot: SnapshotWrite) -> SnapshotResult:
     """Aplica el snapshot parcial en una sola transacción."""
     applied: dict[str, int] = {}
@@ -70,5 +114,5 @@ async def apply_snapshot(session: AsyncSession, snapshot: SnapshotWrite) -> Snap
         key = to_camel(col)
         applied[key] = await repository.upsert_lww(session, model, rows) if rows else 0
         skipped[key] = len(incoming) - applied[key]
-    await session.commit()
+    await _commit_checking_catalog_codes(session)
     return SnapshotResult(applied=applied, skipped=skipped)

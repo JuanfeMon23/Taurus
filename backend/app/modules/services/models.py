@@ -4,7 +4,7 @@ from decimal import Decimal
 from sqlalchemy import Boolean, CheckConstraint, Date, Index, Numeric, Text, Time, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db.base import Base, SyncMixin
+from app.core.db.base import Base, SyncMixin, catalog_fk
 
 
 class Service(SyncMixin, Base):
@@ -18,6 +18,7 @@ class Service(SyncMixin, Base):
         CheckConstraint("commission >= 0", name="commission_non_negative"),
         CheckConstraint("commission_vat >= 0", name="commission_vat_non_negative"),
         Index("ix_services_date", "date"),
+        Index("ix_services_method", "method"),
     )
 
     date: Mapped[date] = mapped_column(Date)
@@ -26,7 +27,7 @@ class Service(SyncMixin, Base):
     is_indrive: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
     commission: Mapped[Decimal] = mapped_column(Numeric(12, 2), server_default=text("0"))
     commission_vat: Mapped[Decimal] = mapped_column(Numeric(12, 2), server_default=text("0"))
-    method: Mapped[str] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(Text, catalog_fk("payment_methods"))
     note: Mapped[str | None] = mapped_column(Text)
     start_time: Mapped[time | None] = mapped_column(Time)
     end_time: Mapped[time | None] = mapped_column(Time)

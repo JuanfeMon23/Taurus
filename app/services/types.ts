@@ -134,21 +134,29 @@ export interface MovementTypeEntry extends SignedEntry {
 
 export type ExpenseCategory = CatalogEntry
 
+/** Modo de tarifa de una categoría; las marcas dicen qué campos usa: `usesRatePerKm` = valor por km, `usesCostInterval` = costo total cada X km. */
+export interface RateMode extends CatalogEntry {
+  usesRatePerKm: boolean
+  usesCostInterval: boolean
+}
+
 export interface Catalogs {
   paymentMethods: PaymentMethod[]
   movementTypes: MovementTypeEntry[]
   fundMovementTypes: SignedEntry[]
   expenseCategories: ExpenseCategory[]
+  rateModes: RateMode[]
 }
 
 export type CatalogKind = keyof Catalogs
 
-export const emptyCatalogs = (): Catalogs => ({ paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [] })
+export const emptyCatalogs = (): Catalogs => ({ paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [] })
 
 export type PaymentMethodRec = PaymentMethod & Meta
 export type MovementTypeRec = MovementTypeEntry & Meta
 export type FundMovementTypeRec = SignedEntry & Meta
 export type ExpenseCategoryRec = ExpenseCategory & Meta
+export type RateModeRec = RateMode & Meta
 
 export type CategoryRec = Category & Meta
 
@@ -173,13 +181,14 @@ export interface Snapshot {
   movementTypes: MovementTypeRec[]
   fundMovementTypes: FundMovementTypeRec[]
   expenseCategories: ExpenseCategoryRec[]
+  rateModes: RateModeRec[]
   settings: SettingsRec[]
 }
 
 export type Collection = keyof Snapshot
 
 export const emptySnapshot = (): Snapshot => ({ categories: [], days: [], services: [], cash: [], movements: [], depositMovements: [], fundMovements: [], shifts: [],
-  shiftTemplates: [], paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], settings: [] })
+  shiftTemplates: [], paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [], settings: [] })
 
 /** Persistencia: carga todo y guarda registros por id (upsert). */
 export interface Store {
@@ -312,7 +321,7 @@ export interface Repo {
   saveShiftTemplate(template: NewShiftTemplate): Promise<ShiftTemplate>
   /** Deja lápida a la plantilla (los turnos ya creados con ella se conservan). */
   deleteShiftTemplate(id: string): Promise<void>
-  /** Los cuatro catálogos completos (también inactivos), ordenados por `sortOrder` y nombre. */
+  /** Los cinco catálogos completos (también inactivos), ordenados por `sortOrder` y nombre. */
   listCatalogs(): Promise<Catalogs>
   /** Crea (sin id) o edita una entrada de catálogo. */
   saveCatalogEntry<Kind extends CatalogKind>(kind: Kind, entry: NewCatalogEntry<Catalogs[Kind][number]>): Promise<Catalogs[Kind][number]>

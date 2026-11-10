@@ -57,6 +57,29 @@ describe('apiStore', () => {
     expect(snapshot.services[0]).toMatchObject({ isIndrive: true, commission: 855, commissionVat: 162.45 })
   })
 
+  it('load conserva los modos de tarifa y los completa vacíos si faltan', async () => {
+    const body = { rateModes: [{ id: 'direct', name: 'Valor por km', usesRatePerKm: true, usesCostInterval: false, sortOrder: 0, active: true, updatedAt: 'x', deleted: false }] }
+    const loaded = await createApiStore('http://x', async () => json(200, body)).load()
+    expect(loaded.rateModes[0]).toMatchObject({ id: 'direct', usesRatePerKm: true, usesCostInterval: false })
+    expect((await createApiStore('http://x', async () => json(200, {})).load()).rateModes).toEqual([])
+  })
+
+  it('422 unknown_catalog_code se traduce a una frase legible con el código y el campo', async () => {
+    const body = { code: 'unknown_catalog_code', message: 'Unknown', details: [{ campo: 'categories.rateMode', mensaje: 'Código de catálogo desconocido: nope' }] }
+    const store = createApiStore('http://x', async () => json(422, body))
+    const error = await store.save({ categories: [] }).catch(caught => caught as Error)
+    expect(error.message).toContain('«nope»')
+    expect(error.message).toContain('modo de tarifa')
+    expect(error.message).toContain('Tarifas > Catálogos')
+    expect(error.message).not.toContain('{')
+  })
+
+  it('422 unknown_catalog_code sin detalles usa una frase general', async () => {
+    const store = createApiStore('http://x', async () => json(422, { code: 'unknown_catalog_code', message: 'x' }))
+    const error = await store.save({}).catch(caught => caught as Error)
+    expect(error.message).toContain('Tarifas > Catálogos')
+  })
+
   it('save hace PUT con el cuerpo JSON', async () => {
     let seen: RequestInit | undefined
     const store = createApiStore('http://x', async (_url, init) => { seen = init; return json(200, { applied: {}, skipped: {} }) })
