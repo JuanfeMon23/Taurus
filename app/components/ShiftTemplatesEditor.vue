@@ -10,7 +10,7 @@ const draft = reactive({ name: '', startTime: '', endTime: '' })
 const draftError = ref<string | null>(null)
 const rowError = ref<{ id: string; message: string } | null>(null)
 const confirming = ref<string | null>(null)
-const { show } = useToast()
+const { show } = useNotify()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
 async function load() {

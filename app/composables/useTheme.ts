@@ -1,28 +1,18 @@
-type Theme = 'dark' | 'light'
+export type Theme = 'dark' | 'light'
 
-const KEY = 'taurus-theme'
-const theme = ref<Theme>('dark')
-let ready = false
-
-function apply(nextTheme: Theme) {
-  theme.value = nextTheme
-  document.documentElement.dataset.theme = nextTheme
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', nextTheme === 'dark' ? '#0a0c11' : '#f4f6fb')
-}
-
-/** Tema claro/oscuro: respeta el guardado, si no el del sistema. */
+/** Tema claro/oscuro sobre el color-mode de Nuxt UI (guarda en `taurus-theme`; sin guardado, el del sistema). */
 export function useTheme() {
-  if (!ready && import.meta.client) {
-    ready = true
-    let saved: string | null = null
-    try { saved = localStorage.getItem(KEY) } catch { /* sin storage */ }
-    const system: Theme = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
-    apply(saved === 'light' || saved === 'dark' ? saved : system)
+  const colorMode = useColorMode()
+  const theme = computed<Theme>(() => (colorMode.value === 'light' ? 'light' : 'dark'))
+
+  if (import.meta.client) {
+    watch(theme, (current) => {
+      document.querySelector('meta[name="theme-color"]')?.setAttribute('content', current === 'dark' ? '#0a0c11' : '#f4f6fb')
+    }, { immediate: true })
   }
+
   function toggle() {
-    const next: Theme = theme.value === 'dark' ? 'light' : 'dark'
-    apply(next)
-    try { localStorage.setItem(KEY, next) } catch { /* sin storage */ }
+    colorMode.preference = theme.value === 'dark' ? 'light' : 'dark'
   }
   return { theme, toggle }
 }

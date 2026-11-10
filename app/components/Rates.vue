@@ -17,7 +17,7 @@ const draft = reactive({
 })
 const commissionForm = reactive({ commissionPercent: null as number | null, vatPercent: null as number | null })
 const commissionErrors = ref<RatesFormErrors>({})
-const { show } = useToast()
+const { show } = useNotify()
 const { catalogs, activeRateModes, refreshCatalogs } = useCatalogs()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
@@ -157,7 +157,7 @@ async function add() {
         <input v-model.number="draft.totalCost" type="number" inputmode="decimal" placeholder="Costo total" class="input">
         <input v-model.number="draft.intervalKm" type="number" inputmode="decimal" placeholder="Cada cuántos km" class="input">
       </div>
-      <button class="btn primary block" @click="add"><Plus :size="18" /> Agregar</button>
+      <button class="btn primary full" @click="add"><Plus :size="18" /> Agregar</button>
     </div>
   </section>
 </template>

@@ -6,7 +6,7 @@ import { formatDuration, tripMinutes } from '../utils/trip'
 
 const days = ref<DayRecord[]>([])
 const confirming = ref<string | null>(null)
-const { show } = useToast()
+const { show } = useNotify()
 
 const errorText = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 

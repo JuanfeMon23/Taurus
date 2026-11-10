@@ -1,3 +1,8 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/* El CSS propio vive en la capa `components`: gana al reset de Tailwind y pierde ante las utilidades de Nuxt UI. */
+@layer components {
 /* ───────── Tokens ───────── */
 :root {
   color-scheme: dark;
@@ -8,6 +13,7 @@
   --surface-2: #1a1f2a;
   --surface-3: #232a38;
   --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
   --text: #f2f4f8;
   --text-2: #b4bbca;
   --muted: #8089a0;
@@ -27,9 +33,28 @@
   --radius: 18px;
   --radius-sm: 12px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Nuxt UI: sus tokens semánticos apuntan a los de Taurus (una sola paleta para ambos sistemas). */
+  --ui-primary: var(--accent);
+  --ui-success: var(--pos);
+  --ui-info: var(--info);
+  --ui-warning: var(--accent);
+  --ui-error: var(--neg);
+  --ui-radius: 0.5rem;
+  --ui-bg: var(--surface);
+  --ui-bg-muted: var(--surface-2);
+  --ui-bg-elevated: var(--surface-2);
+  --ui-bg-accented: var(--surface-3);
+  --ui-border: var(--border);
+  --ui-border-muted: var(--border);
+  --ui-border-accented: var(--border-strong);
+  --ui-text: var(--text-2);
+  --ui-text-toned: var(--text-2);
+  --ui-text-muted: var(--muted);
+  --ui-text-dimmed: var(--muted);
+  --ui-text-highlighted: var(--text);
 }
 
-:root[data-theme='light'] {
+:root.light {
   color-scheme: light;
   --bg: #f4f6fb;
   --bg-glow: radial-gradient(900px 420px at 85% -10%, rgba(255, 176, 32, 0.22), transparent 60%),
@@ -38,6 +63,7 @@
   --surface-2: #eef1f7;
   --surface-3: #e2e7f0;
   --border: rgba(15, 23, 42, 0.09);
+  --border-strong: rgba(15, 23, 42, 0.2);
   --text: #0f172a;
   --text-2: #334155;
   --muted: #64748b;
@@ -129,7 +155,7 @@ input, select { font: inherit; color: inherit; }
   color: var(--accent-ink);
   box-shadow: 0 8px 22px rgba(255, 140, 20, 0.28);
 }
-.btn.block { width: 100%; }
+.btn.full { width: 100%; }
 .btn.ghost { background: transparent; color: var(--muted); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
 .btn.danger { color: var(--neg); }
@@ -213,4 +239,5 @@ input, select { font: inherit; color: inherit; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; animation-delay: 0ms !important; }
+}
 }

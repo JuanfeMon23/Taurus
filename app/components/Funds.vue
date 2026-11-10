@@ -18,7 +18,7 @@ const movements = ref<FundMovement[]>([])
 const rangeMode = ref<RangeMode>('month')
 const { catalogs, activeFundTypes, refreshCatalogs } = useCatalogs()
 const modal = reactive({ open: false, type: '', categoryId: '', amount: null as number | null, note: '', date: todayISO(), error: null as string | null })
-const { show } = useToast()
+const { show } = useNotify()
 let taurus: Awaited<ReturnType<typeof useTaurus>>
 
 async function load() {
@@ -145,7 +145,7 @@ async function remove(id: string) {
           <input v-model="modal.date" type="date" class="input">
         </label>
         <p v-if="modal.error" class="err" role="alert">{{ modal.error }}</p>
-        <button type="submit" class="btn primary block">{{ modalTitle(modal.type) }}</button>
+        <button type="submit" class="btn primary full">{{ modalTitle(modal.type) }}</button>
       </form>
     </BaseModal>
   </section>

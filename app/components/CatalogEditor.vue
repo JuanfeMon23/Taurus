@@ -12,7 +12,7 @@ import { validateCatalogEntryInput } from '../utils/validation'
 const props = defineProps<{ kind: CatalogKind; title: string; hint?: string }>()
 
 const { catalogs, refreshCatalogs } = useCatalogs()
-const { show } = useToast()
+const { show } = useNotify()
 const snapshot = ref<Pick<Snapshot, 'services' | 'movements' | 'fundMovements' | 'categories'> | null>(null)
 const draft = reactive({ name: '', affectsCash: true, sign: 1 as 1 | -1, hasCategory: false, usesRatePerKm: true, usesCostInterval: false })
 const draftError = ref<string | null>(null)
