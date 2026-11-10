@@ -3,7 +3,7 @@ from datetime import date
 from sqlalchemy import Boolean, CheckConstraint, Date, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db.base import Base, SyncMixin
+from app.core.db.base import Base, SyncMixin, catalog_fk
 
 HHMM = r"^([01][0-9]|2[0-3]):[0-5][0-9]$"
 
@@ -19,14 +19,15 @@ class Shift(SyncMixin, Base):
         CheckConstraint(f"start_time ~ '{HHMM}'", name="start_time_format"),
         CheckConstraint(f"end_time is null or end_time ~ '{HHMM}'", name="end_time_format"),
         Index("ix_shifts_date", "date"),
+        Index("ix_shifts_template_id", "template_id"),
     )
 
     date: Mapped[date] = mapped_column(Date)
     start_time: Mapped[str] = mapped_column(Text)
     end_time: Mapped[str | None] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
-    # Sin FK: el sync LWW por registro puede traer el turno antes que su plantilla.
-    template_id: Mapped[str | None] = mapped_column(Text)
+    # FK diferida: el sync puede traer el turno antes que su plantilla, se valida al commit.
+    template_id: Mapped[str | None] = mapped_column(Text, catalog_fk("shift_templates"))
 
 
 class ShiftTemplate(SyncMixin, Base):

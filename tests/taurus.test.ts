@@ -117,6 +117,18 @@ describe('taurus (datos de viaje)', () => {
   })
 })
 
+describe('taurus (turno del viaje)', () => {
+  it('guarda el shiftId del viaje, lo devuelve y lo quita al desligar', async () => {
+    const taurus = await setup()
+    await taurus.saveDay({ date: '2026-11-10', km: 5, services: [{ amount: 100, shiftId: 'turno-1' }, { amount: 200 }] })
+    const saved = (await taurus.repo.getDay('2026-11-10'))!
+    expect(saved.services[0]!.shiftId).toBe('turno-1')
+    expect(saved.services[1]!.shiftId).toBeUndefined()
+    await taurus.saveDay({ date: '2026-11-10', km: 5, services: saved.services.map(({ shiftId: _unlinked, ...rest }) => rest) })
+    expect((await taurus.repo.getDay('2026-11-10'))!.services[0]!.shiftId).toBeUndefined()
+  })
+})
+
 describe('taurus: depósito', () => {
   it('guarda toDeposit en la caja y lo lee de vuelta', async () => {
     const taurus = await setup()

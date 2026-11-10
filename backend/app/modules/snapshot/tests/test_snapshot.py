@@ -545,7 +545,10 @@ async def test_turno_hora_invalida_devuelve_422_en_espanol(client: AsyncClient) 
 
 
 async def test_turno_guarda_template_id_opcional(client: AsyncClient) -> None:
-    await put(client, {"shifts": [shift(templateId="tpl1")]})
+    response = await put(
+        client, {"shiftTemplates": [shift_template()], "shifts": [shift(templateId="tpl1")]}
+    )
+    assert response.status_code == 200
     [stored] = await get_col(client, "shifts")
     assert stored["templateId"] == "tpl1"
 
@@ -729,3 +732,66 @@ async def test_servicio_con_metodo_desconocido_devuelve_422(client: AsyncClient)
     response = await put(client, {"services": [svc(method="card")]})
     assert response.status_code == 422
     assert response.json()["details"][0]["campo"] == "services.method"
+
+
+async def test_servicio_shift_id_ida_y_vuelta(client: AsyncClient) -> None:
+    body = {"shifts": [shift()], "services": [svc(shiftId="sh1")]}
+    assert (await put(client, body)).status_code == 200
+    [stored] = await get_col(client, "services")
+    assert stored["shiftId"] == "sh1"
+
+
+async def test_servicio_sin_shift_id_no_lo_trae(client: AsyncClient) -> None:
+    await put(client, {"services": [svc()]})
+    [stored] = await get_col(client, "services")
+    assert "shiftId" not in stored
+
+
+async def test_servicio_omitir_shift_id_lo_desliga(client: AsyncClient) -> None:
+    await put(client, {"shifts": [shift()], "services": [svc(shiftId="sh1")]})
+    await put(client, {"services": [svc(updatedAt=T2)]})
+    [stored] = await get_col(client, "services")
+    assert "shiftId" not in stored
+    assert stored["updatedAt"] == "2026-11-04T11:00:00Z"
+
+
+async def test_servicio_shift_id_nulo_lo_desliga(client: AsyncClient) -> None:
+    await put(client, {"shifts": [shift()], "services": [svc(shiftId="sh1")]})
+    await put(client, {"services": [svc(updatedAt=T2, shiftId=None)]})
+    [stored] = await get_col(client, "services")
+    assert "shiftId" not in stored
+
+
+async def test_servicio_antes_que_su_turno_en_el_mismo_put(client: AsyncClient) -> None:
+    body = {"services": [svc(shiftId="sh1")], "shifts": [shift()]}
+    assert (await put(client, body)).status_code == 200
+
+
+async def test_servicio_despues_de_su_turno_en_el_mismo_put(client: AsyncClient) -> None:
+    body = {"shifts": [shift()], "services": [svc(shiftId="sh1")]}
+    assert (await put(client, body)).status_code == 200
+
+
+async def test_turno_antes_que_su_plantilla_en_el_mismo_put(client: AsyncClient) -> None:
+    body = {"shifts": [shift(templateId="tpl1")], "shiftTemplates": [shift_template()]}
+    assert (await put(client, body)).status_code == 200
+
+
+async def test_servicio_con_shift_id_inexistente_devuelve_422(client: AsyncClient) -> None:
+    response = await put(client, {"services": [svc(shiftId="nope")]})
+    assert response.status_code == 422
+    error = response.json()
+    assert error["code"] == "unknown_catalog_code"
+    assert error["details"] == [
+        {"campo": "services.shiftId", "mensaje": "Código de catálogo desconocido: nope"}
+    ]
+    assert await get_col(client, "services") == []
+
+
+async def test_turno_con_template_id_inexistente_devuelve_422(client: AsyncClient) -> None:
+    response = await put(client, {"shifts": [shift(templateId="nope")]})
+    assert response.status_code == 422
+    error = response.json()
+    assert error["code"] == "unknown_catalog_code"
+    assert error["details"][0]["campo"] == "shifts.templateId"
+    assert await get_col(client, "shifts") == []

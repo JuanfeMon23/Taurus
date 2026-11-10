@@ -74,6 +74,13 @@ describe('apiStore', () => {
     expect(error.message).not.toContain('{')
   })
 
+  it('422 unknown_catalog_code de services.shiftId pide volver a elegir el turno', async () => {
+    const body = { code: 'unknown_catalog_code', message: 'Unknown', details: [{ campo: 'services.shiftId', mensaje: 'Código de catálogo desconocido: abc' }] }
+    const store = createApiStore('http://x', async () => json(422, body))
+    const error = await store.save({ services: [] }).catch(caught => caught as Error)
+    expect(error.message).toContain('turno de un viaje ya no existe')
+  })
+
   it('422 unknown_catalog_code sin detalles usa una frase general', async () => {
     const store = createApiStore('http://x', async () => json(422, { code: 'unknown_catalog_code', message: 'x' }))
     const error = await store.save({}).catch(caught => caught as Error)

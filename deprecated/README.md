@@ -13,8 +13,11 @@ Código fuera de la app vigente (decisión del usuario, 2026-11-10): la app qued
 | `sheets/app/composables/useSheetsSync.ts` | Estado de sincronización, reacciona a `onDataChange`. |
 | `sheets/app/components/SyncSheet.vue` | Hoja modal para conectar/sincronizar con Google. |
 | `sheets/tests/sheetsMapping.test.ts`, `sheets/tests/sync.test.ts` | Tests movidos con su código (Google falso en memoria). |
+| `shifts-card/app/components/ShiftsCard.vue` | Tarjeta «Turnos del día» de Hoy (2026-11-10): reemplazada por los chips de turnos en la tarjeta de Fecha de `DayForm.vue`. Perdió agregar turno suelto, editar horas del turno y copiar turnos de ayer; las plantillas se siguen editando en `ShiftTemplatesEditor.vue`. |
 
 inDrive: nunca se implementó código; solo la idea (la comisión inDrive vigente en caja es otra cosa y sigue en la app).
+
+Para retomar `ShiftsCard`: `git mv deprecated/shifts-card/app/components/ShiftsCard.vue app/components/` y volver a montar `<ShiftsCard :date="date" @change="shifts = $event" />` en `DayForm.vue`.
 
 ## Dependencias quitadas de package.json
 

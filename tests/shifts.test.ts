@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activeShiftTemplates, appliedTemplateIds, buildShiftFromTemplate, clockNow, copyClosedShifts, findOpenShift, previousDay, shiftForTemplate, totalShiftMinutes, withShiftOnlyDays } from '../app/utils/shifts'
+import { activeShiftTemplates, appliedTemplateIds, buildShiftFromTemplate, clockNow, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, tripsOfShift, unlinkShiftTrips, copyClosedShifts, findOpenShift, previousDay, shiftForTemplate, totalShiftMinutes, withShiftOnlyDays } from '../app/utils/shifts'
 import type { Shift, ShiftTemplate } from '../app/services/types'
 
 const shift = (startTime: string, endTime?: string): Shift => ({ id: startTime, date: '2026-11-06', startTime, ...(endTime ? { endTime } : {}) })
@@ -83,5 +83,44 @@ describe('plantillas de turno', () => {
   it('copyClosedShifts conserva el templateId de los turnos copiados', () => {
     const copies = copyClosedShifts([{ ...shift('12:00', '14:00'), templateId: 'mediodia' }], '2026-11-07')
     expect(copies).toEqual([{ date: '2026-11-07', startTime: '12:00', endTime: '14:00', templateId: 'mediodia' }])
+  })
+})
+
+describe('turno de un viaje', () => {
+  const dayShift = (id: string, templateId?: string): Shift => ({ id, date: '2026-11-10', startTime: '06:00', endTime: '10:00', ...(templateId ? { templateId } : {}) })
+  const trip = (id: string, shiftId?: string) => ({ id, amount: 10, ...(shiftId ? { shiftId } : {}) })
+
+  it('defaultTripShiftId prefiere el turno de la última plantilla usada si está marcada', () => {
+    const shifts = [dayShift('a', 'manana'), dayShift('b', 'noche')]
+    expect(defaultTripShiftId(shifts, 'noche')).toBe('b')
+  })
+  it('defaultTripShiftId usa el único turno del día si la última plantilla no está marcada', () => {
+    expect(defaultTripShiftId([dayShift('a', 'manana')], 'noche')).toBe('a')
+    expect(defaultTripShiftId([dayShift('a')], undefined)).toBe('a')
+  })
+  it('defaultTripShiftId da vacío con varios turnos sin coincidencia o sin turnos', () => {
+    expect(defaultTripShiftId([dayShift('a', 'manana'), dayShift('b', 'noche')], 'tarde')).toBe('')
+    expect(defaultTripShiftId([dayShift('a', 'manana'), dayShift('b', 'noche')], undefined)).toBe('')
+    expect(defaultTripShiftId([], 'noche')).toBe('')
+  })
+  it('tripsOfShift devuelve los viajes ligados al turno', () => {
+    expect(tripsOfShift([trip('1', 'a'), trip('2', 'b'), trip('3')], 'a').map(item => item.id)).toEqual(['1'])
+  })
+  it('unlinkShiftTrips quita el shiftId solo de los viajes de ese turno, sin mutar', () => {
+    const original = [trip('1', 'a'), trip('2', 'b')]
+    const result = unlinkShiftTrips(original, 'a')
+    expect(result[0]).not.toHaveProperty('shiftId')
+    expect(result[1]?.shiftId).toBe('b')
+    expect(original[0]?.shiftId).toBe('a')
+  })
+  it('recuerda la última plantilla en el storage y tolera storage roto', () => {
+    const data = new Map<string, string>()
+    const storage = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => void data.set(key, value) }
+    expect(loadLastShiftTemplateId(storage)).toBeUndefined()
+    saveLastShiftTemplateId('noche', storage)
+    expect(loadLastShiftTemplateId(storage)).toBe('noche')
+    const broken = { getItem: () => { throw new Error('x') }, setItem: () => { throw new Error('x') } }
+    expect(loadLastShiftTemplateId(broken)).toBeUndefined()
+    expect(() => saveLastShiftTemplateId('noche', broken)).not.toThrow()
   })
 })

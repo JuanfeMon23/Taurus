@@ -1,5 +1,5 @@
 /** Lógica pura de turnos para la vista Hoy (sin E/S). */
-import type { DayRecord, NewShift, Shift, ShiftTemplate } from '../services/types'
+import type { DayRecord, NewShift, Service, Shift, ShiftTemplate } from '../services/types'
 import { tripMinutes } from './trip'
 
 /** Hora local como HH:MM. */
@@ -60,4 +60,35 @@ export function withShiftOnlyDays(days: DayRecord[], shifts: Shift[]): DayRecord
     date, km: 0, services: [], shifts: dayShifts, costs: [], gross: 0, totalCost: 0, commission: 0, commissionVat: 0, net: 0,
   }))
   return [...days, ...emptyDays]
+}
+
+/** Turno por defecto de un viaje nuevo: el de la última plantilla usada si está marcada en el día; si no, el único turno del día; si no, vacío (sin turno). */
+export function defaultTripShiftId(shifts: Shift[], lastTemplateId?: string): string {
+  const remembered = lastTemplateId ? shiftForTemplate(shifts, lastTemplateId) : undefined
+  if (remembered) return remembered.id
+  return shifts.length === 1 ? shifts[0]!.id : ''
+}
+
+/** Viajes ligados a un turno del día. */
+export const tripsOfShift = <T extends Pick<Service, 'shiftId'>>(trips: T[], shiftId: string): T[] => trips.filter(trip => trip.shiftId === shiftId)
+
+/** Copia de los viajes donde los ligados a `shiftId` quedan sin turno. */
+export const unlinkShiftTrips = <T extends Pick<Service, 'shiftId'>>(trips: T[], shiftId: string): T[] =>
+  trips.map(trip => {
+    if (trip.shiftId !== shiftId) return trip
+    const { shiftId: _removed, ...rest } = trip
+    return rest as T
+  })
+
+/** Preferencia de interfaz: última plantilla de turno elegida para un viaje (localStorage, tolera storage no disponible). */
+const LAST_SHIFT_TEMPLATE_KEY = 'taurus.lastShiftTemplate'
+type KeyValueStorage = Pick<Storage, 'getItem' | 'setItem'>
+const browserStorage = (): KeyValueStorage | undefined => (typeof localStorage === 'undefined' ? undefined : localStorage)
+
+export function loadLastShiftTemplateId(storage: KeyValueStorage | undefined = browserStorage()): string | undefined {
+  try { return storage?.getItem(LAST_SHIFT_TEMPLATE_KEY) || undefined } catch { return undefined }
+}
+
+export function saveLastShiftTemplateId(templateId: string, storage: KeyValueStorage | undefined = browserStorage()): void {
+  try { storage?.setItem(LAST_SHIFT_TEMPLATE_KEY, templateId) } catch { /* sin storage */ }
 }

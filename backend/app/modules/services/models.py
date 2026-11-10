@@ -19,6 +19,7 @@ class Service(SyncMixin, Base):
         CheckConstraint("commission_vat >= 0", name="commission_vat_non_negative"),
         Index("ix_services_date", "date"),
         Index("ix_services_method", "method"),
+        Index("ix_services_shift_id", "shift_id"),
     )
 
     date: Mapped[date] = mapped_column(Date)
@@ -34,3 +35,5 @@ class Service(SyncMixin, Base):
     distance_km: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     origin: Mapped[str | None] = mapped_column(Text)
     destination: Mapped[str | None] = mapped_column(Text)
+    # Turno del día en que se hizo el viaje; FK diferida (el snapshot llega en orden arbitrario).
+    shift_id: Mapped[str | None] = mapped_column(Text, catalog_fk("shifts"))

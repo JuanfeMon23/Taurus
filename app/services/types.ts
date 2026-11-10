@@ -39,6 +39,8 @@ export interface ServiceRec extends Meta {
   distanceKm?: number
   origin?: string
   destination?: string
+  /** Turno del día (`shifts[].id`) al que pertenece el viaje; ausente = sin turno. */
+  shiftId?: string
   /** Viaje inDrive (cobra comisión); ausente = true. */
   isIndrive?: boolean
   /** Comisión e IVA calculados al guardar el viaje (≥ 0). */
@@ -212,6 +214,8 @@ export interface Service {
   distanceKm?: number
   origin?: string
   destination?: string
+  /** Turno del día (`shifts[].id`) al que pertenece el viaje; ausente = sin turno. */
+  shiftId?: string
   /** Viaje inDrive (cobra comisión); ausente = true. */
   isIndrive?: boolean
   /** Comisión e IVA calculados al guardar el viaje (≥ 0). */

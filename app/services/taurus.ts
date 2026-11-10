@@ -34,6 +34,7 @@ function tripFields<T extends object>(target: T, from: Service): T {
   if (from.distanceKm !== undefined && from.distanceKm !== null) out.distanceKm = from.distanceKm
   if (from.origin) out.origin = from.origin
   if (from.destination) out.destination = from.destination
+  if (from.shiftId) out.shiftId = from.shiftId
   if (from.isIndrive !== undefined) out.isIndrive = from.isIndrive
   if (from.commission !== undefined) out.commission = from.commission
   if (from.commissionVat !== undefined) out.commissionVat = from.commissionVat

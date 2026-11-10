@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CalendarDays, Check, Clock, Gift, MapPin, NotebookPen, Pencil, Route, Trash2, TrendingDown, TrendingUp, X } from 'lucide-vue-next'
+import { CalendarDays, Check, Clock, Layers, Gift, MapPin, NotebookPen, Pencil, Route, Trash2, TrendingDown, TrendingUp, X } from 'lucide-vue-next'
 import { computeDay, type Category } from '../utils/calc'
 import { dayKm, dayTotals, extraKmFrom, removeTrip, sortTrips, tripSummary, upsertTrip } from '../utils/dayTrips'
 import { computeCommission, DEFAULT_RATES, type CommissionRates } from '../utils/commission'
@@ -9,8 +9,8 @@ import { GENERIC_ERROR, toUserMessage } from '../utils/errors'
 import { categoryIcon, methodIcon } from '../utils/icons'
 import { formatDuration, sumDistance, tripMinutes, tripTotal, validateTrip, type TripErrors } from '../utils/trip'
 import { dayActivity } from '../utils/activity'
-import { activityNow, clockNow } from '../utils/shifts'
-import type { Service, Shift } from '../services/types'
+import { activeShiftTemplates, activityNow, buildShiftFromTemplate, defaultTripShiftId, loadLastShiftTemplateId, saveLastShiftTemplateId, shiftForTemplate, tripsOfShift, unlinkShiftTrips, clockNow } from '../utils/shifts'
+import type { Service, Shift, ShiftTemplate } from '../services/types'
 
 // Un solo formulario de viaje; al guardar el viaje queda en el día y el formulario se vacía.
 // El id se conserva al editar para que la sincronización reconozca el mismo servicio.
@@ -25,6 +25,7 @@ type Form = {
   isIndrive: boolean
   origin: string
   destination: string
+  shiftId: string // '' = sin turno
 }
 const { catalogs, activeMethods, defaultMethod, refreshCatalogs } = useCatalogs()
 // Medios ofrecidos: los activos y, al editar un viaje, el que ya tenía aunque se haya desactivado.
@@ -32,13 +33,16 @@ const methodChoices = computed(() => {
   const current = catalogs.value.paymentMethods.find(method => method.id === form.value.method)
   return current && !current.active ? [...activeMethods.value, current] : activeMethods.value
 })
-const blank = (): Form => ({ startTime: '', endTime: '', distanceKm: null, amount: null, bonus: null, method: defaultMethod.value, isIndrive: true, origin: '', destination: '' })
+const blank = (): Form => ({ startTime: '', endTime: '', distanceKm: null, amount: null, bonus: null, method: defaultMethod.value, isIndrive: true, origin: '', destination: '', shiftId: defaultTripShiftId(shifts.value, loadLastShiftTemplateId()) })
 
 const date = ref(todayISO())
 const extraKm = ref<number | null>(null)
 const note = ref('')
 const trips = ref<Service[]>([])
 const shifts = ref<Shift[]>([])
+const templates = ref<ShiftTemplate[]>([])
+const shiftBusy = ref(false)
+const confirmingShift = ref<string | null>(null)
 const form = ref<Form>(blank())
 const categories = ref<Category[]>([])
 const rates = ref<CommissionRates>({ ...DEFAULT_RATES })
@@ -53,6 +57,7 @@ let taurus: Awaited<ReturnType<typeof useTaurus>>
 const errorText = (error: unknown, fallback: string) => (toUserMessage(error) === GENERIC_ERROR ? fallback : toUserMessage(error))
 
 function resetForm() {
+  shiftTouched.value = false
   form.value = blank()
   attempted.value = false
   nextTick(() => firstField.value?.focus())
@@ -61,10 +66,13 @@ function resetForm() {
 async function load() {
   const existing = await taurus.repo.getDay(date.value)
   trips.value = existing?.services ?? []
+  shifts.value = await taurus.repo.listShifts(date.value)
+  templates.value = await taurus.repo.listShiftTemplates()
   const extra = existing ? extraKmFrom(existing.km, trips.value) : 0
   extraKm.value = extra > 0 ? extra : null
   note.value = existing?.note ?? ''
   confirming.value = null
+  confirmingShift.value = null
   form.value = blank()
   attempted.value = false
 }
@@ -86,6 +94,7 @@ onActivated(async () => {
     categories.value = await taurus.repo.listCategories()
     rates.value = await taurus.repo.getRates()
     await refreshCatalogs()
+    templates.value = await taurus.repo.listShiftTemplates()
     if (!form.value.id && !form.value.method) form.value.method = defaultMethod.value
   }
 })
@@ -97,6 +106,72 @@ watch(date, async () => {
     show(errorText(error, 'No se pudo cargar'), 'error')
   }
 })
+
+// Chips de turnos del día: las plantillas activas (marcadas o no) y los turnos que no corresponden a una plantilla activa (sueltos o de plantillas desactivadas), siempre marcados.
+type ShiftChip = { key: string, name: string, range: string, shift?: Shift, template?: ShiftTemplate }
+const shiftRange = (shift: Pick<Shift, 'startTime' | 'endTime'>) => `${shift.startTime}–${shift.endTime ?? 'en curso'}`
+const shiftName = (shift: Shift) => templates.value.find(template => template.id === shift.templateId)?.name ?? 'Turno suelto'
+const shiftChips = computed<ShiftChip[]>(() => {
+  const activeTemplates = activeShiftTemplates(templates.value)
+  const fromTemplates = activeTemplates.map((template): ShiftChip => {
+    const shift = shiftForTemplate(shifts.value, template.id)
+    return { key: template.id, name: template.name, range: shift ? shiftRange(shift) : `${template.startTime}–${template.endTime}`, shift, template }
+  })
+  const activeIds = new Set(activeTemplates.map(template => template.id))
+  const others = shifts.value.filter(shift => !shift.templateId || !activeIds.has(shift.templateId))
+    .map((shift): ShiftChip => ({ key: shift.id, name: shiftName(shift), range: shiftRange(shift), shift }))
+  return [...fromTemplates, ...others]
+})
+const shiftNameById = (shiftId?: string) => {
+  const shift = shiftId ? shifts.value.find(candidate => candidate.id === shiftId) : undefined
+  return shift ? `${shiftName(shift)} ${shiftRange(shift)}` : ''
+}
+const shiftChoiceValid = (shiftId: string) => !shiftId || shifts.value.some(shift => shift.id === shiftId)
+
+// Al cambiar los turnos del día, un viaje nuevo recalcula su turno por defecto si el elegido ya no existe o aún no se tocó.
+const shiftTouched = ref(false)
+function syncFormShift() {
+  if (form.value.id) return
+  if (!shiftTouched.value || !shiftChoiceValid(form.value.shiftId)) form.value.shiftId = defaultTripShiftId(shifts.value, loadLastShiftTemplateId())
+}
+function pickShift(shiftId: string) {
+  form.value.shiftId = shiftId
+  shiftTouched.value = true
+}
+
+async function toggleShiftChip(chip: ShiftChip) {
+  if (shiftBusy.value) return
+  const existing = chip.shift
+  try {
+    if (!existing) {
+      shiftBusy.value = true
+      await taurus.repo.saveShift(buildShiftFromTemplate(chip.template!, date.value))
+      show(`${chip.name} agregado al día`)
+    } else {
+      const linked = tripsOfShift(trips.value, existing.id)
+      if (linked.length && confirmingShift.value !== existing.id) {
+        confirmingShift.value = existing.id
+        setTimeout(() => confirmingShift.value === existing.id && (confirmingShift.value = null), 2500)
+        return
+      }
+      shiftBusy.value = true
+      // Primero se desligan los viajes: el servidor rechaza viajes que apunten a un turno inexistente.
+      if (linked.length) await taurus.saveDay({ date: date.value, km: totalKm.value, note: note.value || undefined, services: unlinkShiftTrips(trips.value, existing.id) })
+      await taurus.repo.deleteShift(existing.id)
+      show(linked.length ? `${chip.name} quitado; ${linked.length} ${linked.length === 1 ? 'viaje quedó' : 'viajes quedaron'} sin turno` : `${chip.name} quitado del día`)
+    }
+    const editingId = form.value.id
+    const draft = { ...form.value }
+    await load()
+    if (editingId) form.value = { ...draft, shiftId: shiftChoiceValid(draft.shiftId) ? draft.shiftId : '' }
+    else syncFormShift()
+    cashKey.value++
+  } catch (error) {
+    show(`No se pudo cambiar el turno: ${errorText(error, 'error al guardar')}`, 'error')
+  } finally {
+    shiftBusy.value = false
+  }
+}
 
 const sorted = computed(() => sortTrips(trips.value))
 // Viajes total o parcialmente fuera de turno (solo si el día tiene turnos); el turno en curso cuenta hasta ahora en el día de hoy.
@@ -139,10 +214,13 @@ async function saveTrip() {
     distanceKm: formValues.distanceKm as number,
     origin: formValues.origin.trim() || undefined,
     destination: formValues.destination.trim() || undefined,
+    shiftId: formValues.shiftId || undefined,
   }
   saving.value = true
   try {
     const editing = !!formValues.id
+    const chosenShift = shifts.value.find(shift => shift.id === formValues.shiftId)
+    if (chosenShift?.templateId) saveLastShiftTemplateId(chosenShift.templateId)
     await persist(upsertTrip(trips.value, trip))
     show(editing ? 'Viaje actualizado' : 'Viaje guardado')
     resetForm()
@@ -165,6 +243,7 @@ function edit(trip: Service) {
     isIndrive: trip.isIndrive !== false,
     origin: trip.origin ?? '',
     destination: trip.destination ?? '',
+    shiftId: trip.shiftId && shiftChoiceValid(trip.shiftId) ? trip.shiftId : '',
   }
   attempted.value = false
   nextTick(() => firstField.value?.focus())
@@ -229,9 +308,18 @@ async function saveMeta() {
             <input v-model="note" type="text" placeholder="Opcional" class="input" @change="saveMeta">
           </div>
         </label>
+        <div class="field">
+          <span>Turnos</span>
+          <div v-if="shiftChips.length" class="shift-chips" role="group" aria-label="Turnos del día">
+            <button v-for="chip in shiftChips" :key="chip.key" type="button" class="chip shift-chip" :class="{ on: !!chip.shift, confirm: !!chip.shift && confirmingShift === chip.shift.id }"
+              :aria-pressed="!!chip.shift" :disabled="shiftBusy" :data-template="chip.template?.id" :data-shift="chip.shift?.id" @click="toggleShiftChip(chip)">
+              <template v-if="chip.shift && confirmingShift === chip.shift.id">Quitar: {{ tripsOfShift(trips, chip.shift.id).length }} viaje(s) quedarán sin turno. Toca otra vez</template>
+              <template v-else><b>{{ chip.name }}</b> <span class="num">{{ chip.range }}</span></template>
+            </button>
+          </div>
+          <p v-else class="muted small">Registra tus turnos habituales en Tarifas para marcarlos aquí con un toque.</p>
+        </div>
       </div>
-
-      <ShiftsCard :date="date" @change="shifts = $event" />
 
       <form class="card stack" novalidate @submit.prevent="saveTrip">
         <div class="row between">
@@ -239,6 +327,16 @@ async function saveMeta() {
           <button v-if="form.id" type="button" class="btn ghost small-btn" @click="resetForm"><X :size="16" /> Cancelar edición</button>
         </div>
 
+        <div v-if="shifts.length" class="field">
+          <span>Turno</span>
+          <div class="shift-chips" role="group" aria-label="Turno del viaje">
+            <button type="button" class="chip shift-chip" :class="{ on: !form.shiftId }" :aria-pressed="!form.shiftId" data-trip-shift="" @click="pickShift('')">Sin turno</button>
+            <button v-for="shift in shifts" :key="shift.id" type="button" class="chip shift-chip" :class="{ on: form.shiftId === shift.id }"
+              :aria-pressed="form.shiftId === shift.id" :data-trip-shift="shift.id" @click="pickShift(shift.id)">
+              <b>{{ shiftName(shift) }}</b> <span class="num">{{ shiftRange(shift) }}</span>
+            </button>
+          </div>
+        </div>
         <div class="grid2">
           <label class="field">
             <span>Recogida</span>
@@ -381,6 +479,7 @@ async function saveMeta() {
               <p class="muted small">
                 <template v-if="trip.distanceKm !== undefined">{{ trip.distanceKm }} km · </template>{{ entryName(catalogs.paymentMethods, trip.method ?? defaultMethod) }}
               </p>
+              <p v-if="shiftNameById(trip.shiftId)" class="muted small"><Layers :size="12" class="inline-icon" /> {{ shiftNameById(trip.shiftId) }}</p>
               <p v-if="trip.isIndrive === false" class="muted small">Propio</p>
               <p v-else-if="(trip.commission ?? 0) > 0" class="muted small num">Comisión {{ money(trip.commission!) }} + IVA {{ money(trip.commissionVat ?? 0) }}</p>
               <p v-if="tripSummary(trip).route" class="muted small">{{ tripSummary(trip).route }}</p>
@@ -419,6 +518,12 @@ async function saveMeta() {
   .trips-col { align-self: stretch; }
   .trips-card { position: sticky; top: 24px; max-height: calc(100vh - 48px); }
 }
+.shift-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.shift-chip { background: var(--surface-2); color: var(--text-2); border: 1.5px solid transparent; }
+.shift-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.shift-chip.confirm { border-color: var(--neg); color: var(--neg); }
+.shift-chip:disabled { opacity: 0.5; pointer-events: none; }
+.inline-icon { display: inline; vertical-align: -1px; }
 .out-of-shift { color: var(--info); font-weight: 600; }
 .trip .row.between > b:first-child { min-width: 0; }
 .trip .num, .trip .dur { white-space: nowrap; }

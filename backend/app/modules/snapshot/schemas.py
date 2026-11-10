@@ -191,6 +191,7 @@ class ServiceRec(SyncRecord):
     distance_km: NonNeg | None = None
     origin: str | None = None
     destination: str | None = None
+    shift_id: str | None = None
 
     @model_validator(mode="after")
     def _viaje_completo(self) -> Self:
