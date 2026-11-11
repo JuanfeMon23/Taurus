@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { areaGradient, escapeHtml, heatCell, legendTop, smoothLine, tooltipCard, valueAxis, withAlpha } from '../app/utils/chartOptions'
+import { init, use } from 'echarts/core'
+import { HeatmapChart } from 'echarts/charts'
+import { GridComponent, VisualMapComponent } from 'echarts/components'
+import { SVGRenderer } from 'echarts/renderers'
+import { areaGradient, escapeHtml, heatCell, hiddenHeatVisualMap, legendTop, smoothLine, tooltipCard, valueAxis, withAlpha } from '../app/utils/chartOptions'
 import { numberCompact } from '../app/utils/format'
 
 describe('numberCompact', () => {
@@ -86,5 +90,30 @@ describe('heatCell', () => {
   it('acota la razón y tolera colores no hexadecimales', () => {
     expect(heatCell(INFO, '#ffffff', 5).fill).toBe(heatCell(INFO, '#ffffff', 1).fill)
     expect(heatCell('var(--info)', 'var(--surface)', 0.5).fill).toContain('var(--info)')
+  })
+})
+
+describe('hiddenHeatVisualMap', () => {
+  use([HeatmapChart, GridComponent, VisualMapComponent, SVGRenderer])
+  const renderHeatmap = (withVisualMap: boolean) => {
+    const chart = init(null, undefined, { renderer: 'svg', ssr: true, width: 300, height: 200 })
+    chart.setOption({
+      animation: false,
+      xAxis: { type: 'category', data: ['a', 'b'] }, yAxis: { type: 'category', data: ['row'] },
+      ...(withVisualMap ? { visualMap: hiddenHeatVisualMap(10) } : {}),
+      series: [{ type: 'heatmap', data: [{ value: [0, 0, 5], itemStyle: { color: '#123456', opacity: 0.3 } }, { value: [1, 0, -5], itemStyle: { color: '#abcdef' } }] }],
+    })
+    const svg = chart.renderToSVGString()
+    chart.dispose()
+    return svg
+  }
+  it('sin visualMap ECharts rechaza el mapa de calor fuera de producción', () => {
+    expect(() => renderHeatmap(false)).toThrow('Heatmap must use with visualMap')
+  })
+  it('con el visualMap oculto dibuja y conserva el color y la opacidad de cada celda', () => {
+    const svg = renderHeatmap(true).toLowerCase()
+    expect(svg).toContain('#123456')
+    expect(svg).toContain('#abcdef')
+    expect(svg).toContain('0.3')
   })
 })

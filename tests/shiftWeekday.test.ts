@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { ALL_WEEKDAYS_KEY, buildShiftWeekdayGrid, filterByWeekday, weekdayFilterOptions, weekdayOf } from '../app/utils/shiftWeekday'
-import { buildShiftBreakdown } from '../app/utils/shiftStats'
+import { ALL_WEEKDAYS_KEY, buildShiftWeekdayGrid, cellOpacity, DIMMED_OPACITY, filterByWeekday, highlightOpacity, isShiftHighlighted, isWeekdayHighlighted, weekdayFilterOptions, weekdayOf } from '../app/utils/shiftWeekday'
+import { ALL_SHIFTS_KEY, buildShiftBreakdown } from '../app/utils/shiftStats'
 import { dayNet } from '../app/utils/commission'
 import type { DayRecord, Service, Shift, ShiftTemplate } from '../app/services/types'
 
@@ -77,5 +77,34 @@ describe('buildShiftWeekdayGrid', () => {
   })
   it('sin días devuelve vacío', () => {
     expect(buildShiftWeekdayGrid([], TEMPLATES)).toEqual([])
+  })
+})
+
+describe('resaltado por filtros', () => {
+  it('sin filtro todo está resaltado', () => {
+    expect(isShiftHighlighted('t-am', ALL_SHIFTS_KEY)).toBe(true)
+    expect(isWeekdayHighlighted(3, ALL_WEEKDAYS_KEY)).toBe(true)
+  })
+  it('con turno elegido solo ese turno está resaltado', () => {
+    expect(isShiftHighlighted('t-am', 't-am')).toBe(true)
+    expect(isShiftHighlighted('t-pm', 't-am')).toBe(false)
+  })
+  it('con día elegido solo su columna (índice 0 = lunes) está resaltada', () => {
+    expect(isWeekdayHighlighted(4, '5')).toBe(true)
+    expect(isWeekdayHighlighted(0, '5')).toBe(false)
+  })
+  it('atenúa lo no resaltado con opacidad baja', () => {
+    expect(highlightOpacity(true)).toBe(1)
+    expect(highlightOpacity(false)).toBe(DIMMED_OPACITY)
+    expect(DIMMED_OPACITY).toBeGreaterThan(0)
+    expect(DIMMED_OPACITY).toBeLessThan(1)
+  })
+  it('una celda solo es plena si coinciden turno y día', () => {
+    expect(cellOpacity('t-am', 4, 't-am', '5')).toBe(1)
+    expect(cellOpacity('t-am', 3, 't-am', '5')).toBe(DIMMED_OPACITY)
+    expect(cellOpacity('t-pm', 4, 't-am', '5')).toBe(DIMMED_OPACITY)
+    expect(cellOpacity('t-pm', 3, 't-am', '5')).toBe(DIMMED_OPACITY)
+    expect(cellOpacity('t-pm', 3, ALL_SHIFTS_KEY, ALL_WEEKDAYS_KEY)).toBe(1)
+    expect(cellOpacity('t-pm', 4, ALL_SHIFTS_KEY, '5')).toBe(1)
   })
 })

@@ -3,7 +3,7 @@ import { ChartColumn, ChevronDown, CircleDollarSign, Filter, Clock, Gauge, Hourg
 import type { DayRecord, ShiftTemplate } from '../services/types'
 import { clockNow, withShiftOnlyDays } from '../utils/shifts'
 import { ALL_SHIFTS_KEY, buildShiftBreakdown, dropStaleOpenShifts, filterDaysByShift, shiftFilterOptions, type ShiftBreakdownRow } from '../utils/shiftStats'
-import { ALL_WEEKDAYS_KEY, buildShiftWeekdayGrid, filterByWeekday, WEEKDAY_SHORT_NAMES, weekdayFilterOptions, WEEKDAY_NAMES } from '../utils/shiftWeekday'
+import { ALL_WEEKDAYS_KEY, buildShiftWeekdayGrid, cellOpacity, filterByWeekday, highlightOpacity, isShiftHighlighted, WEEKDAY_SHORT_NAMES, weekdayFilterOptions, WEEKDAY_NAMES } from '../utils/shiftWeekday'
 import { buildActivityRows, buildCostSeries, buildIncomeSeries, type ActivityDay } from '../utils/chartSeries'
 import { entryName, movementTypeHasCategory } from '../utils/catalogs'
 import { dayActivity, periodActivity } from '../utils/activity'
@@ -181,7 +181,7 @@ const activityIndicators = computed(() => [
       <Filter :size="18" />
       <div>
         <b>Solo cuentan los días {{ weekdayName.toLowerCase() }}</b>
-        <p class="small">El día de la semana sale de la fecha de cada día. Los gastos varios de caja se cuentan por la fecha en que se hicieron; el mapa «Turno × día de la semana» siempre muestra todos los días.</p>
+        <p class="small">El día de la semana sale de la fecha de cada día. Los gastos varios de caja se cuentan por la fecha en que se hicieron; los bloques comparativos («Turno × día de la semana», desglose y gráficas por turno) siguen mostrando todo y solo resaltan lo elegido.</p>
       </div>
     </div>
     <div v-if="isFiltered" class="notice info" role="status" data-notice="shift-filter">
@@ -237,14 +237,14 @@ const activityIndicators = computed(() => [
 
           <div class="card stack" data-card="shift-breakdown">
             <span class="title">Desglose por turno</span>
-            <p class="muted small">Por turno habitual del periodo, sin importar el filtro. Neto por hora = neto / horas de turno. Los viajes sin turno y los turnos sueltos van en filas aparte.</p>
+            <p class="muted small">Por turno habitual del periodo; siempre se comparan todos los turnos y, si eliges uno en el filtro, ese turno se resalta y los demás se atenúan. Neto por hora = neto / horas de turno. Los viajes sin turno y los turnos sueltos van en filas aparte.</p>
             <div v-if="shiftRows.length" class="table-wrap">
               <table class="shift-table">
                 <thead>
                   <tr><th v-for="column in shiftColumns" :key="column">{{ column }}</th></tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in shiftRows" :key="row.key">
+                  <tr v-for="row in shiftRows" :key="row.key" :data-dimmed="!isShiftHighlighted(row.key, activeFilter)" :style="{ opacity: highlightOpacity(isShiftHighlighted(row.key, activeFilter)) }">
                     <td>{{ row.name }}</td><td>{{ row.trips }}</td><td>{{ money(row.gross) }}</td>
                     <td :class="row.net < 0 ? 'neg' : ''">{{ money(row.net) }}</td><td>{{ Math.round(row.km) }}</td>
                     <td>{{ row.shiftMinutes > 0 ? duration(row.shiftMinutes) : '—' }}</td>
@@ -267,9 +267,9 @@ const activityIndicators = computed(() => [
                 <button type="button" :class="{ active: weekdayView === 'table' }" @click="weekdayView = 'table'">Tabla</button>
               </div>
             </div>
-            <p class="muted small">Neto por hora de turno de cada turno habitual según el día de la semana (de la fecha del día), sin importar los filtros. Las celdas vacías no tuvieron ese turno; los viajes sin turno no entran.</p>
+            <p class="muted small">Neto por hora de turno de cada turno habitual según el día de la semana (de la fecha del día). Siempre se muestran todos los turnos y días: si eliges un turno y/o un día en los filtros, su fila y/o columna se resaltan y lo demás se atenúa. Las celdas vacías no tuvieron ese turno; los viajes sin turno no entran.</p>
             <div v-if="weekdayView === 'map'" data-chart="shift-weekday" class="chart" role="img" aria-label="Neto por hora de turno según turno y día de la semana">
-              <ShiftWeekdayHeatmap :rows="weekdayGrid" />
+              <ShiftWeekdayHeatmap :rows="weekdayGrid" :shift-key="activeFilter" :weekday-key="weekdayFilter" />
             </div>
             <div v-else-if="weekdayGrid.length" class="table-wrap">
               <table class="weekday-table">
@@ -279,7 +279,7 @@ const activityIndicators = computed(() => [
                 <tbody>
                   <tr v-for="row in weekdayGrid" :key="row.key">
                     <td>{{ row.name }}</td>
-                    <td v-for="(cell, index) in row.cells" :key="index" :class="cell && cell.netPerShiftHour !== null && cell.netPerShiftHour < 0 ? 'neg' : ''">
+                    <td v-for="(cell, index) in row.cells" :key="index" :data-dimmed="cellOpacity(row.key, index, activeFilter, weekdayFilter) < 1" :style="{ opacity: cellOpacity(row.key, index, activeFilter, weekdayFilter) }" :class="cell && cell.netPerShiftHour !== null && cell.netPerShiftHour < 0 ? 'neg' : ''">
                       <template v-if="cell && cell.netPerShiftHour !== null">{{ money(cell.netPerShiftHour) }}/h<span class="muted small block">{{ cell.trips }} {{ cell.trips === 1 ? 'viaje' : 'viajes' }} · {{ duration(cell.shiftMinutes) }}</span></template>
                       <template v-else>—</template>
                     </td>
@@ -294,13 +294,13 @@ const activityIndicators = computed(() => [
             <div class="card chart-card">
               <span class="title">Neto por hora de turno</span>
               <div data-chart="shift-hourly" class="chart" role="img" aria-label="Neto por hora de turno, comparado entre turnos">
-                <ShiftCompareChart :items="netPerHourItems" metric-label="Neto por hora de turno" unit="/h" />
+                <ShiftCompareChart :items="netPerHourItems" :shift-key="activeFilter" metric-label="Neto por hora de turno" unit="/h" />
               </div>
             </div>
             <div class="card chart-card">
               <span class="title">Neto total por turno</span>
               <div data-chart="shift-net" class="chart" role="img" aria-label="Neto total del periodo, comparado entre turnos">
-                <ShiftCompareChart :items="netTotalItems" metric-label="Neto total" />
+                <ShiftCompareChart :items="netTotalItems" :shift-key="activeFilter" metric-label="Neto total" />
               </div>
             </div>
           </div>

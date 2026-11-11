@@ -3,21 +3,25 @@ import type { EChartsCoreOption } from 'echarts/core'
 import { useChartTheme } from '../../composables/useChartTheme'
 import { BAR_RADIUS, categoryAxis, chartGrid, tooltipCard, valueAxis } from '../../utils/chartOptions'
 import { money, moneyCompact } from '../../utils/format'
+import { ALL_SHIFTS_KEY } from '../../utils/shiftStats'
+import { highlightOpacity, isShiftHighlighted } from '../../utils/shiftWeekday'
 import ChartCanvas from './ChartCanvas.vue'
 
 /**
  * Barras horizontales: un valor por turno (plantilla). El color identifica al turno y es el mismo en las dos gráficas
  * comparativas (posición del turno en la paleta categórica); el nombre y el valor van siempre rotulados, así que el
- * color nunca es la única señal. Los valores negativos se dibujan reales (a la izquierda del cero).
+ * color nunca es la única señal. Con un turno elegido en el filtro, los demás se atenúan. Los valores negativos se dibujan reales (a la izquierda del cero).
  */
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   /** Turnos en el orden del desglose; `value` null = sin dato (no se dibuja). */
   items: { key: string; name: string; value: number | null }[]
   /** Texto del tooltip y del rótulo, p. ej. «Neto por hora de turno». */
   metricLabel: string
   /** Sufijo del valor mostrado, p. ej. «/h». */
   unit?: string
-}>()
+  /** Turno elegido en el filtro (clave); los demás se dibujan atenuados. */
+  shiftKey?: string
+}>(), { shiftKey: ALL_SHIFTS_KEY })
 
 const { palette, baseOption } = useChartTheme()
 
@@ -46,7 +50,7 @@ const option = computed<EChartsCoreOption>(() => {
     series: [{
       type: 'bar', barMaxWidth: 22, showBackground: true,
       backgroundStyle: { color: colors.surfaceRaised, opacity: 0.45, borderRadius: BAR_RADIUS + 2 },
-      data: ordered.map(item => ({ value: item.value, itemStyle: { color: colorOf(item.key), borderRadius: item.value >= 0 ? [0, BAR_RADIUS + 2, BAR_RADIUS + 2, 0] : [BAR_RADIUS + 2, 0, 0, BAR_RADIUS + 2] } })),
+      data: ordered.map(item => ({ value: item.value, itemStyle: { color: colorOf(item.key), opacity: highlightOpacity(isShiftHighlighted(item.key, props.shiftKey)), borderRadius: item.value >= 0 ? [0, BAR_RADIUS + 2, BAR_RADIUS + 2, 0] : [BAR_RADIUS + 2, 0, 0, BAR_RADIUS + 2] } })),
       label: { show: true, position: 'right', color: colors.text, fontFamily: colors.font, fontSize: 12, fontWeight: 600, formatter: (item: { value: number }) => `${moneyCompact(item.value)}${unitSuffix.value}` },
     }],
   }

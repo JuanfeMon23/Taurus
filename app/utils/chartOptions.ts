@@ -179,3 +179,11 @@ export function heatCell(base: string, surface: string, ratio: number): { fill: 
   const contrastWithBlack = (luminance + 0.05) / 0.05
   return { fill: `rgb(${mixed.join(', ')})`, label: contrastWithWhite >= contrastWithBlack ? '#ffffff' : '#111111' }
 }
+
+/**
+ * `visualMap` oculto que ECharts exige a toda serie `heatmap` fuera de producción («Heatmap must use with visualMap»).
+ * Solo mapea `symbolSize` (sin efecto en rectángulos), así que no pisa el `itemStyle.color` ni la opacidad de cada celda.
+ */
+export function hiddenHeatVisualMap(maxMagnitude: number) {
+  return { type: 'piecewise' as const, show: false, dimension: 2, seriesIndex: 0, pieces: [{ min: -maxMagnitude, max: maxMagnitude }], inRange: { symbolSize: 1 }, outOfRange: { symbolSize: 1 } }
+}

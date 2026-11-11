@@ -1,18 +1,20 @@
 <script setup lang="ts">
 import type { EChartsCoreOption } from 'echarts/core'
 import { useChartTheme } from '../../composables/useChartTheme'
-import { heatCell, tooltipCard } from '../../utils/chartOptions'
+import { heatCell, hiddenHeatVisualMap, tooltipCard } from '../../utils/chartOptions'
 import { money, moneyCompact } from '../../utils/format'
-import { WEEKDAY_NAMES, WEEKDAY_SHORT_NAMES, type ShiftWeekdayRow } from '../../utils/shiftWeekday'
+import { ALL_WEEKDAYS_KEY, cellOpacity, WEEKDAY_NAMES, WEEKDAY_SHORT_NAMES, type ShiftWeekdayRow } from '../../utils/shiftWeekday'
+import { ALL_SHIFTS_KEY } from '../../utils/shiftStats'
 import { formatDuration } from '../../utils/trip'
 import ChartCanvas from './ChartCanvas.vue'
 
 /**
  * Mapa de calor turno × día de la semana: valor = neto por hora de turno. Escala secuencial de un tono (azul de
  * información; los netos negativos usan el color negativo); el valor va rotulado en cada celda, así que el color no es
- * la única señal. Las celdas sin datos se dejan vacías, no en 0.
+ * la única señal. Las celdas sin datos se dejan vacías, no en 0. Con filtro de turno y/o día se muestran todas, pero las que
+ * no coinciden se atenúan (resaltado, no recorte).
  */
-const props = defineProps<{ rows: ShiftWeekdayRow[] }>()
+const props = withDefaults(defineProps<{ rows: ShiftWeekdayRow[]; shiftKey?: string; weekdayKey?: string }>(), { shiftKey: ALL_SHIFTS_KEY, weekdayKey: ALL_WEEKDAYS_KEY })
 
 const { palette, baseOption } = useChartTheme()
 const height = computed(() => `${Math.max(150, 76 + props.rows.length * 46)}px`)
@@ -25,11 +27,12 @@ const option = computed<EChartsCoreOption>(() => {
   const data = props.rows.flatMap((row, rowIndex) => row.cells.flatMap((cell, columnIndex) => {
     if (!cell || cell.netPerShiftHour === null) return []
     const { fill, label } = heatCell(cell.netPerShiftHour < 0 ? colors.negative : colors.info, colors.surface, Math.abs(cell.netPerShiftHour) / maxMagnitude)
-    return [{ value: [columnIndex, rowIndex, cell.netPerShiftHour], itemStyle: { color: fill }, label: { color: label || colors.text } }]
+    return [{ value: [columnIndex, rowIndex, cell.netPerShiftHour], itemStyle: { color: fill, opacity: cellOpacity(row.key, columnIndex, props.shiftKey, props.weekdayKey) }, label: { color: label || colors.text } }]
   }))
   return {
     ...baseOption.value,
     grid: { left: 4, right: 8, top: 28, bottom: 4, containLabel: true },
+    visualMap: hiddenHeatVisualMap(maxMagnitude),
     tooltip: {
       ...baseOption.value.tooltip,
       trigger: 'item',

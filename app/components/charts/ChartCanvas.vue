@@ -3,11 +3,11 @@
 import { use } from 'echarts/core'
 import type { EChartsCoreOption } from 'echarts/core'
 import { BarChart, CustomChart, HeatmapChart, LineChart } from 'echarts/charts'
-import { AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent } from 'echarts/components'
+import { AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent, VisualMapComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
 
-use([BarChart, HeatmapChart, LineChart, CustomChart, AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent, SVGRenderer])
+use([BarChart, HeatmapChart, LineChart, CustomChart, AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent, VisualMapComponent, SVGRenderer])
 
 defineProps<{ option: EChartsCoreOption }>()
 </script>

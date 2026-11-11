@@ -1,6 +1,6 @@
 /** Turno × día de la semana (puro, sin E/S): el día de la semana se deriva de la fecha del día, nunca se elige a mano. */
 import type { DayRecord, ShiftTemplate } from '../services/types'
-import { buildShiftBreakdown, NO_SHIFT_KEY } from './shiftStats'
+import { ALL_SHIFTS_KEY, buildShiftBreakdown, NO_SHIFT_KEY } from './shiftStats'
 
 export const ALL_WEEKDAYS_KEY = 'all'
 /** Lunes = 1 … domingo = 7 (ISO 8601). */
@@ -57,3 +57,18 @@ export function buildShiftWeekdayGrid(days: DayRecord[], templates: ShiftTemplat
       }),
     }))
 }
+
+/** Opacidad de lo que no coincide con los filtros activos en los bloques comparativos (siguen mostrando todo, atenuado). */
+export const DIMMED_OPACITY = 0.3
+
+/** ¿La fila/barra de este turno se resalta? Sí sin filtro de turno o si es el turno elegido. */
+export const isShiftHighlighted = (shiftKey: string, shiftFilterKey: string): boolean => shiftFilterKey === ALL_SHIFTS_KEY || shiftKey === shiftFilterKey
+
+/** ¿La columna de este día (0 = lunes … 6 = domingo) se resalta? Sí sin filtro de día o si es el día elegido. */
+export const isWeekdayHighlighted = (columnIndex: number, weekdayFilterKey: string): boolean => weekdayFilterKey === ALL_WEEKDAYS_KEY || String(columnIndex + 1) === weekdayFilterKey
+
+export const highlightOpacity = (highlighted: boolean): number => (highlighted ? 1 : DIMMED_OPACITY)
+
+/** Opacidad de una celda turno × día: plena solo si coinciden ambos filtros activos. */
+export const cellOpacity = (shiftKey: string, columnIndex: number, shiftFilterKey: string, weekdayFilterKey: string): number =>
+  highlightOpacity(isShiftHighlighted(shiftKey, shiftFilterKey) && isWeekdayHighlighted(columnIndex, weekdayFilterKey))
