@@ -3,6 +3,7 @@ import { ChartColumn, ChevronDown, CircleDollarSign, Filter, Clock, Gauge, Hourg
 import type { DayRecord, ShiftTemplate } from '../services/types'
 import { clockNow, withShiftOnlyDays } from '../utils/shifts'
 import { ALL_SHIFTS_KEY, buildShiftBreakdown, dropStaleOpenShifts, filterDaysByShift, shiftFilterOptions, type ShiftBreakdownRow } from '../utils/shiftStats'
+import { ALL_WEEKDAYS_KEY, buildShiftWeekdayGrid, filterByWeekday, WEEKDAY_SHORT_NAMES, weekdayFilterOptions, WEEKDAY_NAMES } from '../utils/shiftWeekday'
 import { buildActivityRows, buildCostSeries, buildIncomeSeries, type ActivityDay } from '../utils/chartSeries'
 import { entryName, movementTypeHasCategory } from '../utils/catalogs'
 import { dayActivity, periodActivity } from '../utils/activity'
@@ -18,12 +19,15 @@ const CostsChart = defineAsyncComponent(() => import('./charts/CostsChart.vue'))
 const HourlyActivityChart = defineAsyncComponent(() => import('./charts/HourlyActivityChart.vue'))
 const IncomeChart = defineAsyncComponent(() => import('./charts/IncomeChart.vue'))
 const ShiftCompareChart = defineAsyncComponent(() => import('./charts/ShiftCompareChart.vue'))
+const ShiftWeekdayHeatmap = defineAsyncComponent(() => import('./charts/ShiftWeekdayHeatmap.vue'))
 
 // Gráficas (ECharts, componentes en ./charts): income ← chartSeries; costs ← costSeries; activity ← activityRows + hourlyMinutes.
 const days = ref<DayRecord[]>([])
 const expenses = ref<StatsExpense[]>([])
 const templates = ref<ShiftTemplate[]>([])
 const shiftFilter = ref(ALL_SHIFTS_KEY)
+const weekdayFilter = ref(ALL_WEEKDAYS_KEY)
+const weekdayView = ref<'map' | 'table'>('map')
 const granularity = ref<Granularity>('day')
 const loadError = ref<string | null>(null)
 const { catalogs, defaultMethod, refreshCatalogs } = useCatalogs()
@@ -58,15 +62,22 @@ const filterOptions = computed(() => shiftFilterOptions(allDays.value, templates
 // Si el turno elegido ya no tiene datos, el filtro vuelve a «Todos».
 const activeFilter = computed(() => (filterOptions.value.some(option => option.key === shiftFilter.value) ? shiftFilter.value : ALL_SHIFTS_KEY))
 const isFiltered = computed(() => activeFilter.value !== ALL_SHIFTS_KEY)
+const isWeekdayFiltered = computed(() => weekdayFilter.value !== ALL_WEEKDAYS_KEY)
+const weekdayName = computed(() => WEEKDAY_NAMES[Number(weekdayFilter.value) - 1] ?? '')
+const weekdayOptions = weekdayFilterOptions()
 // El periodo (qué buckets entran) se define con todos los datos, para que el filtro no corra la ventana.
 const periodBuckets = computed(() => aggregate(allDays.value, granularity.value, expenses.value, statsOptions.value).slice(-LIMIT[granularity.value]))
 const periodKeys = computed(() => new Set(periodBuckets.value.map(bucket => bucket.key)))
 const inPeriod = (date: string) => periodKeys.value.has(bucketKey(date, granularity.value))
-const periodDaysAll = computed(() => allDays.value.filter(day => inPeriod(day.date)))
+// Todos los días del periodo, sin filtros: base del mapa Turno × día de la semana, que compara ambas dimensiones.
+const periodDaysUnfiltered = computed(() => allDays.value.filter(day => inPeriod(day.date)))
+// El día de la semana sale de la fecha de cada día; con uno elegido solo cuentan esos días (y sus gastos varios, que también tienen fecha).
+const periodDaysAll = computed(() => filterByWeekday(periodDaysUnfiltered.value, weekdayFilter.value))
 // Con un turno elegido solo cuentan sus viajes y horas; km extra y gastos varios de caja quedan fuera (ver `filterDaysByShift`).
 const periodDays = computed(() => filterDaysByShift(periodDaysAll.value, templates.value, activeFilter.value))
-const buckets = computed(() => (isFiltered.value ? aggregate(periodDays.value, granularity.value, [], statsOptions.value) : periodBuckets.value))
-const periodSummary = computed(() => summarize(periodDays.value, isFiltered.value ? [] : expenses.value.filter(expense => inPeriod(expense.date)), statsOptions.value))
+const periodExpenses = computed(() => (isFiltered.value ? [] : filterByWeekday(expenses.value.filter(expense => inPeriod(expense.date)), weekdayFilter.value)))
+const buckets = computed(() => (isFiltered.value || isWeekdayFiltered.value ? aggregate(periodDays.value, granularity.value, periodExpenses.value, statsOptions.value) : periodBuckets.value))
+const periodSummary = computed(() => summarize(periodDays.value, periodExpenses.value, statsOptions.value))
 
 const activityDays = periodDays
 const activity = computed(() => {
@@ -75,6 +86,7 @@ const activity = computed(() => {
   return { ...periodActivity(perDay), longestGap: perDay.reduce((longest, day) => Math.max(longest, day.longestGap), 0) }
 })
 const shiftRows = computed<ShiftBreakdownRow[]>(() => buildShiftBreakdown(periodDaysAll.value, templates.value, clockNow()))
+const weekdayGrid = computed(() => buildShiftWeekdayGrid(periodDaysUnfiltered.value, templates.value, clockNow()))
 const shiftColumns = ['Turno', 'Viajes', 'Bruto', 'Neto', 'Km', 'Horas de turno', 'Neto/hora de turno', '% aprovechamiento']
 const netPerHourItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.netPerShiftHour })))
 const netTotalItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.net })))
@@ -155,6 +167,22 @@ const activityIndicators = computed(() => [
           <ChevronDown :size="18" />
         </div>
       </label>
+      <label v-if="days.length" class="field weekday-filter">
+        <span>Día de la semana</span>
+        <div class="select">
+          <select v-model="weekdayFilter" class="input" aria-label="Filtrar estadísticas por día de la semana" data-filter="weekday">
+            <option v-for="option in weekdayOptions" :key="option.key" :value="option.key">{{ option.name }}</option>
+          </select>
+          <ChevronDown :size="18" />
+        </div>
+      </label>
+    </div>
+    <div v-if="isWeekdayFiltered" class="notice info" role="status" data-notice="weekday-filter">
+      <Filter :size="18" />
+      <div>
+        <b>Solo cuentan los días {{ weekdayName.toLowerCase() }}</b>
+        <p class="small">El día de la semana sale de la fecha de cada día. Los gastos varios de caja se cuentan por la fecha en que se hicieron; el mapa «Turno × día de la semana» siempre muestra todos los días.</p>
+      </div>
     </div>
     <div v-if="isFiltered" class="notice info" role="status" data-notice="shift-filter">
       <Filter :size="18" />
@@ -230,6 +258,38 @@ const activityIndicators = computed(() => [
             <p v-else class="muted small">Aún no hay viajes ni turnos en este periodo.</p>
           </div>
 
+          <div class="card chart-card" data-card="shift-weekday">
+            <div class="row between">
+              <span class="title">Turno × día de la semana</span>
+              <div class="seg view-toggle" :style="{ '--n': 2, '--i': weekdayView === 'map' ? 0 : 1 }" role="group" aria-label="Vista del turno por día de la semana">
+                <span class="thumb" />
+                <button type="button" :class="{ active: weekdayView === 'map' }" @click="weekdayView = 'map'">Mapa</button>
+                <button type="button" :class="{ active: weekdayView === 'table' }" @click="weekdayView = 'table'">Tabla</button>
+              </div>
+            </div>
+            <p class="muted small">Neto por hora de turno de cada turno habitual según el día de la semana (de la fecha del día), sin importar los filtros. Las celdas vacías no tuvieron ese turno; los viajes sin turno no entran.</p>
+            <div v-if="weekdayView === 'map'" data-chart="shift-weekday" class="chart" role="img" aria-label="Neto por hora de turno según turno y día de la semana">
+              <ShiftWeekdayHeatmap :rows="weekdayGrid" />
+            </div>
+            <div v-else-if="weekdayGrid.length" class="table-wrap">
+              <table class="weekday-table">
+                <thead>
+                  <tr><th>Turno</th><th v-for="name in WEEKDAY_SHORT_NAMES" :key="name">{{ name }}</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in weekdayGrid" :key="row.key">
+                    <td>{{ row.name }}</td>
+                    <td v-for="(cell, index) in row.cells" :key="index" :class="cell && cell.netPerShiftHour !== null && cell.netPerShiftHour < 0 ? 'neg' : ''">
+                      <template v-if="cell && cell.netPerShiftHour !== null">{{ money(cell.netPerShiftHour) }}/h<span class="muted small block">{{ cell.trips }} {{ cell.trips === 1 ? 'viaje' : 'viajes' }} · {{ duration(cell.shiftMinutes) }}</span></template>
+                      <template v-else>—</template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="muted small">Aún no hay turnos en este periodo.</p>
+          </div>
+
           <div class="charts">
             <div class="card chart-card">
               <span class="title">Neto por hora de turno</span>
@@ -300,7 +360,8 @@ const activityIndicators = computed(() => [
 <style scoped>
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
 .modes { width: 420px; max-width: 100%; }
-.shift-filter { width: 280px; max-width: 100%; }
+.shift-filter, .weekday-filter { width: 280px; max-width: 100%; }
+.view-toggle { width: 180px; }
 .notice p { margin-top: 2px; }
 .neg { color: var(--neg); }
 .err { color: var(--neg); font-size: 13px; font-weight: 600; }

@@ -2,12 +2,12 @@
 // Único punto donde se registran los módulos de ECharts (tree-shaking); solo cliente (la app es ssr:false).
 import { use } from 'echarts/core'
 import type { EChartsCoreOption } from 'echarts/core'
-import { BarChart, CustomChart, LineChart } from 'echarts/charts'
+import { BarChart, CustomChart, HeatmapChart, LineChart } from 'echarts/charts'
 import { AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
 
-use([BarChart, LineChart, CustomChart, AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent, SVGRenderer])
+use([BarChart, HeatmapChart, LineChart, CustomChart, AxisPointerComponent, GraphicComponent, GridComponent, LegendComponent, PolarComponent, TooltipComponent, SVGRenderer])
 
 defineProps<{ option: EChartsCoreOption }>()
 </script>

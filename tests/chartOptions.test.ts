@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { areaGradient, escapeHtml, legendTop, smoothLine, tooltipCard, valueAxis, withAlpha } from '../app/utils/chartOptions'
+import { areaGradient, escapeHtml, heatCell, legendTop, smoothLine, tooltipCard, valueAxis, withAlpha } from '../app/utils/chartOptions'
 import { numberCompact } from '../app/utils/format'
 
 describe('numberCompact', () => {
@@ -65,5 +65,26 @@ describe('valueAxis / legendTop / smoothLine', () => {
     expect('areaStyle' in dashed).toBe(false)
     expect(dashed.lineStyle.type).toEqual([7, 5])
     expect(solid.connectNulls).toBe(false)
+  })
+})
+
+describe('heatCell', () => {
+  const INFO = '#2a78d6'
+  it('la intensidad crece con la razón y nunca se confunde con celda vacía', () => {
+    const channel = (fill: string) => Number(/rgb\((\d+)/.exec(fill)![1])
+    const light = heatCell(INFO, '#ffffff', 0).fill
+    const strong = heatCell(INFO, '#ffffff', 1).fill
+    expect(light).not.toBe('rgb(255, 255, 255)')
+    expect(channel(strong)).toBeLessThan(channel(light))
+    expect(strong).toBe('rgb(42, 120, 214)')
+  })
+  it('el rótulo contrasta en fondo claro y oscuro', () => {
+    expect(heatCell(INFO, '#ffffff', 0).label).toBe('#111111')
+    expect(heatCell('#1b4a8f', '#ffffff', 1).label).toBe('#ffffff')
+    expect(heatCell(INFO, '#14161a', 0).label).toBe('#ffffff')
+  })
+  it('acota la razón y tolera colores no hexadecimales', () => {
+    expect(heatCell(INFO, '#ffffff', 5).fill).toBe(heatCell(INFO, '#ffffff', 1).fill)
+    expect(heatCell('var(--info)', 'var(--surface)', 0.5).fill).toContain('var(--info)')
   })
 })

@@ -147,3 +147,35 @@ export function smoothLine(colors: ChartPalette, name: string, data: (number | n
 
 /** Radio de esquinas para barras apiladas (solo arriba) o con extremo redondeado. */
 export const BAR_RADIUS = 6
+
+function parseHex(color: string): [number, number, number] | null {
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())
+  if (!match) return null
+  const hex = match[1]!.length === 3 ? match[1]!.split('').map(digit => digit + digit).join('') : match[1]!
+  return [0, 2, 4].map(offset => parseInt(hex.slice(offset, offset + 2), 16)) as [number, number, number]
+}
+
+const relativeLuminance = ([red, green, blue]: [number, number, number]): number => {
+  const [linearRed, linearGreen, linearBlue] = [red, green, blue].map(channel => {
+    const unit = channel / 255
+    return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4
+  }) as [number, number, number]
+  return 0.2126 * linearRed + 0.7152 * linearGreen + 0.0722 * linearBlue
+}
+
+/**
+ * Celda de mapa de calor en escala secuencial de un tono: mezcla `base` sobre `surface` según `ratio` (0-1, intensidad
+ * mínima 0,16 para que una celda con dato se distinga de una vacía). Devuelve el color de relleno y el del rótulo
+ * (claro u oscuro, el de mayor contraste con el relleno ya mezclado) para que se lea en tema claro y oscuro.
+ */
+export function heatCell(base: string, surface: string, ratio: number): { fill: string; label: string } {
+  const baseRgb = parseHex(base)
+  const surfaceRgb = parseHex(surface)
+  const intensity = 0.16 + 0.84 * Math.min(1, Math.max(0, ratio))
+  if (!baseRgb || !surfaceRgb) return { fill: withAlpha(base, intensity), label: '' }
+  const mixed = baseRgb.map((channel, index) => Math.round(channel * intensity + surfaceRgb[index]! * (1 - intensity))) as [number, number, number]
+  const luminance = relativeLuminance(mixed)
+  const contrastWithWhite = 1.05 / (luminance + 0.05)
+  const contrastWithBlack = (luminance + 0.05) / 0.05
+  return { fill: `rgb(${mixed.join(', ')})`, label: contrastWithWhite >= contrastWithBlack ? '#ffffff' : '#111111' }
+}
