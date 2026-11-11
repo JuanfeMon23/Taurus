@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChartColumn, CircleDollarSign, Clock, Gauge, Hourglass, Percent, Receipt, Route, Timer, TrendingUp, Wallet, Sunrise } from 'lucide-vue-next'
+import { ChartColumn, ChevronDown, CircleDollarSign, Filter, Clock, Gauge, Hourglass, Percent, Receipt, Route, Timer, TrendingUp, Wallet, Sunrise } from 'lucide-vue-next'
 import type { DayRecord, ShiftTemplate } from '../services/types'
 import { clockNow, withShiftOnlyDays } from '../utils/shifts'
 import { ALL_SHIFTS_KEY, buildShiftBreakdown, dropStaleOpenShifts, filterDaysByShift, shiftFilterOptions, type ShiftBreakdownRow } from '../utils/shiftStats'
@@ -55,7 +55,6 @@ const statsOptions = computed(() => ({ defaultMethodId: defaultMethod.value }))
 // Un turno en curso solo cuenta (hasta la hora actual) en el día de hoy; en días pasados se ignora.
 const allDays = computed(() => dropStaleOpenShifts(days.value, todayISO()))
 const filterOptions = computed(() => shiftFilterOptions(allDays.value, templates.value))
-const filterItems = computed(() => filterOptions.value.map(option => ({ label: option.name, value: option.key })))
 // Si el turno elegido ya no tiene datos, el filtro vuelve a «Todos».
 const activeFilter = computed(() => (filterOptions.value.some(option => option.key === shiftFilter.value) ? shiftFilter.value : ALL_SHIFTS_KEY))
 const isFiltered = computed(() => activeFilter.value !== ALL_SHIFTS_KEY)
@@ -76,11 +75,7 @@ const activity = computed(() => {
   return { ...periodActivity(perDay), longestGap: perDay.reduce((longest, day) => Math.max(longest, day.longestGap), 0) }
 })
 const shiftRows = computed<ShiftBreakdownRow[]>(() => buildShiftBreakdown(periodDaysAll.value, templates.value, clockNow()))
-const shiftColumns = [
-  { accessorKey: 'name', header: 'Turno' }, { accessorKey: 'trips', header: 'Viajes' }, { accessorKey: 'gross', header: 'Bruto' },
-  { accessorKey: 'net', header: 'Neto' }, { accessorKey: 'km', header: 'Km' }, { accessorKey: 'shiftMinutes', header: 'Horas de turno' },
-  { accessorKey: 'netPerShiftHour', header: 'Neto/hora de turno' }, { accessorKey: 'utilization', header: '% aprovechamiento' },
-]
+const shiftColumns = ['Turno', 'Viajes', 'Bruto', 'Neto', 'Km', 'Horas de turno', 'Neto/hora de turno', '% aprovechamiento']
 const netPerHourItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.netPerShiftHour })))
 const netTotalItems = computed(() => shiftRows.value.map(row => ({ key: row.key, name: row.name, value: row.net })))
 const hourlyMinutes = computed(() => activity.value.hourlyActivity)
@@ -151,13 +146,23 @@ const activityIndicators = computed(() => [
       <span class="thumb" />
       <button v-for="[modeKey, modeLabel] in MODES" :key="modeKey" type="button" :class="{ active: granularity === modeKey }" @click="granularity = modeKey">{{ modeLabel }}</button>
     </div>
-      <UFormField v-if="days.length" label="Turno" class="shift-filter">
-        <USelect v-model="shiftFilter" :items="filterItems" value-key="value" label-key="label" class="w-full" aria-label="Filtrar estadísticas por turno" data-filter="shift" />
-      </UFormField>
+      <label v-if="days.length" class="field shift-filter">
+        <span>Turno</span>
+        <div class="select">
+          <select v-model="shiftFilter" class="input" aria-label="Filtrar estadísticas por turno" data-filter="shift">
+            <option v-for="option in filterOptions" :key="option.key" :value="option.key">{{ option.name }}</option>
+          </select>
+          <ChevronDown :size="18" />
+        </div>
+      </label>
     </div>
-    <UAlert v-if="isFiltered" color="info" variant="subtle" icon="i-lucide-filter" data-notice="shift-filter"
-      title="Solo cuentan los viajes y las horas de este turno"
-      description="El km extra del día y los gastos varios de caja no se reparten entre turnos, así que no se incluyen aquí. Los costos por km se calculan con los km de los viajes del turno." />
+    <div v-if="isFiltered" class="notice info" role="status" data-notice="shift-filter">
+      <Filter :size="18" />
+      <div>
+        <b>Solo cuentan los viajes y las horas de este turno</b>
+        <p class="small">El km extra del día y los gastos varios de caja no se reparten entre turnos, así que no se incluyen aquí. Los costos por km se calculan con los km de los viajes del turno.</p>
+      </div>
+    </div>
 
     <p v-if="loadError" class="err" role="alert">{{ loadError }}</p>
 
@@ -205,17 +210,23 @@ const activityIndicators = computed(() => [
           <div class="card stack" data-card="shift-breakdown">
             <span class="title">Desglose por turno</span>
             <p class="muted small">Por turno habitual del periodo, sin importar el filtro. Neto por hora = neto / horas de turno. Los viajes sin turno y los turnos sueltos van en filas aparte.</p>
-            <UTable v-if="shiftRows.length" :data="shiftRows" :columns="shiftColumns" class="shift-table" :ui="{ th: 'text-right first:text-left', td: 'text-right first:text-left tabular-nums whitespace-nowrap' }">
-              <template #gross-cell="{ row }">{{ money(row.original.gross) }}</template>
-              <template #net-cell="{ row }"><span :class="row.original.net < 0 ? 'neg' : ''">{{ money(row.original.net) }}</span></template>
-              <template #km-cell="{ row }">{{ Math.round(row.original.km) }}</template>
-              <template #shiftMinutes-cell="{ row }">{{ row.original.shiftMinutes > 0 ? duration(row.original.shiftMinutes) : '—' }}</template>
-              <template #netPerShiftHour-cell="{ row }">
-                <span v-if="row.original.netPerShiftHour === null">—</span>
-                <span v-else :class="row.original.netPerShiftHour < 0 ? 'neg' : ''">{{ money(row.original.netPerShiftHour) }}</span>
-              </template>
-              <template #utilization-cell="{ row }">{{ row.original.utilization === null ? '—' : percent(row.original.utilization) }}</template>
-            </UTable>
+            <div v-if="shiftRows.length" class="table-wrap">
+              <table class="shift-table">
+                <thead>
+                  <tr><th v-for="column in shiftColumns" :key="column">{{ column }}</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in shiftRows" :key="row.key">
+                    <td>{{ row.name }}</td><td>{{ row.trips }}</td><td>{{ money(row.gross) }}</td>
+                    <td :class="row.net < 0 ? 'neg' : ''">{{ money(row.net) }}</td><td>{{ Math.round(row.km) }}</td>
+                    <td>{{ row.shiftMinutes > 0 ? duration(row.shiftMinutes) : '—' }}</td>
+                    <td v-if="row.netPerShiftHour === null">—</td>
+                    <td v-else :class="row.netPerShiftHour < 0 ? 'neg' : ''">{{ money(row.netPerShiftHour) }}</td>
+                    <td>{{ row.utilization === null ? '—' : percent(row.utilization) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             <p v-else class="muted small">Aún no hay viajes ni turnos en este periodo.</p>
           </div>
 
@@ -290,6 +301,7 @@ const activityIndicators = computed(() => [
 .toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 16px; }
 .modes { width: 420px; max-width: 100%; }
 .shift-filter { width: 280px; max-width: 100%; }
+.notice p { margin-top: 2px; }
 .neg { color: var(--neg); }
 .err { color: var(--neg); font-size: 13px; font-weight: 600; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }

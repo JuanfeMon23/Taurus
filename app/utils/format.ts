@@ -17,3 +17,12 @@ export function moneyCompact(amount: number): string {
   if (absolute >= 1_000) return `${sign}$ ${decimalFormatter.format(absolute / 1_000)} k`
   return `${sign}$ ${Math.round(absolute)}`
 }
+
+/** Número corto sin símbolo para ejes de gráficas: "1,2 M", "350 k", "850", "0,5" (los menores de 1000 conservan un decimal). */
+export function numberCompact(amount: number): string {
+  const absolute = Math.abs(amount)
+  const sign = amount < 0 ? '-' : ''
+  if (absolute >= 1_000_000) return `${sign}${decimalFormatter.format(absolute / 1_000_000)} M`
+  if (absolute >= 1_000) return `${sign}${decimalFormatter.format(absolute / 1_000)} k`
+  return `${sign}${decimalFormatter.format(absolute)}`
+}

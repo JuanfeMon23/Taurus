@@ -1,25 +1,8 @@
-/** Paleta de gráficas tomada de los tokens CSS del proyecto; se recalcula al cambiar el tema claro/oscuro. */
-export interface ChartPalette {
-  text: string
-  textSecondary: string
-  muted: string
-  border: string
-  surface: string
-  surfaceRaised: string
-  accent: string
-  positive: string
-  negative: string
-  info: string
-  series: string[]
-  font: string
-}
+import { axisPointerBand, tooltipBase, type ChartPalette } from '../utils/chartOptions'
 
 const SERIES_TOKENS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7', '--s8']
 
-export function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
+/** Paleta de gráficas desde los tokens CSS (claro y oscuro) y opciones base comunes; se recalcula al alternar el tema. */
 export function useChartTheme() {
   const { theme } = useTheme()
   const palette = computed<ChartPalette>(() => {
@@ -31,9 +14,10 @@ export function useChartTheme() {
       textSecondary: token('--text-2'),
       muted: token('--muted'),
       border: token('--border'),
+      borderStrong: token('--border-strong'),
       surface: token('--surface'),
       surfaceRaised: token('--surface-2'),
-      accent: token('--accent'),
+      accent: token('--accent-chart') || token('--accent'),
       positive: token('--pos'),
       negative: token('--neg'),
       info: token('--info'),
@@ -43,17 +27,15 @@ export function useChartTheme() {
   })
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-  /** Ajustes comunes: tipografía, animación y estilo del tooltip. */
+  /** Ajustes comunes: tipografía, animación de entrada corta (apagada con prefers-reduced-motion) y tooltip como tarjeta. */
   const baseOption = computed(() => ({
     animation: !reducedMotion,
+    animationDuration: 450,
+    animationEasing: 'cubicOut' as const,
+    animationDurationUpdate: 250,
     textStyle: { fontFamily: palette.value.font, color: palette.value.textSecondary },
-    tooltip: {
-      backgroundColor: palette.value.surface,
-      borderColor: palette.value.border,
-      borderWidth: 1,
-      textStyle: { color: palette.value.text, fontFamily: palette.value.font, fontSize: 12 },
-      extraCssText: 'border-radius:12px;box-shadow:var(--shadow);',
-    },
+    tooltip: tooltipBase(palette.value),
   }))
-  return { palette, baseOption }
+  const axisPointer = computed(() => axisPointerBand(palette.value))
+  return { palette, baseOption, axisPointer }
 }

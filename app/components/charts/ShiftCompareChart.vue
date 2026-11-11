@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EChartsCoreOption } from 'echarts/core'
-import { escapeHtml, useChartTheme } from '../../composables/useChartTheme'
+import { useChartTheme } from '../../composables/useChartTheme'
+import { BAR_RADIUS, categoryAxis, chartGrid, tooltipCard, valueAxis } from '../../utils/chartOptions'
 import { money, moneyCompact } from '../../utils/format'
 import ChartCanvas from './ChartCanvas.vue'
 
@@ -31,21 +32,22 @@ const option = computed<EChartsCoreOption>(() => {
   const ordered = [...drawn.value].reverse() // el eje de categorías horizontal crece hacia arriba
   return {
     ...baseOption.value,
-    grid: { left: 8, right: 72, top: 8, bottom: 4, containLabel: true },
+    grid: chartGrid(8, 72),
     tooltip: {
       ...baseOption.value.tooltip,
       trigger: 'item',
-      formatter: (item: { name: string; value: number }) => `<b>${escapeHtml(item.name)}</b><div>${escapeHtml(props.metricLabel)}: <b>${money(item.value)}${unitSuffix.value}</b></div>`,
+      formatter: (item: { name: string; value: number; color: string }) => tooltipCard({
+        title: item.name,
+        rows: [{ color: item.color, label: props.metricLabel, value: `${money(item.value)}${unitSuffix.value}` }],
+      }),
     },
-    xAxis: { type: 'value', axisLabel: { color: colors.muted, formatter: moneyCompact }, splitLine: { lineStyle: { color: colors.border } } },
-    yAxis: {
-      type: 'category', data: ordered.map(item => item.name), axisLine: { lineStyle: { color: colors.border } }, axisTick: { show: false },
-      axisLabel: { color: colors.textSecondary, width: 130, overflow: 'truncate' },
-    },
+    xAxis: valueAxis(colors),
+    yAxis: { ...categoryAxis(colors, ordered.map(item => item.name), { baseline: true }), axisLabel: { color: colors.textSecondary, fontSize: 12, width: 130, overflow: 'truncate' } },
     series: [{
-      type: 'bar', barMaxWidth: 28,
-      data: ordered.map(item => ({ value: item.value, itemStyle: { color: colorOf(item.key), borderRadius: item.value >= 0 ? [0, 6, 6, 0] : [6, 0, 0, 6] } })),
-      label: { show: true, position: 'right', color: colors.text, fontFamily: colors.font, fontSize: 12, formatter: (item: { value: number }) => `${moneyCompact(item.value)}${unitSuffix.value}` },
+      type: 'bar', barMaxWidth: 22, showBackground: true,
+      backgroundStyle: { color: colors.surfaceRaised, opacity: 0.45, borderRadius: BAR_RADIUS + 2 },
+      data: ordered.map(item => ({ value: item.value, itemStyle: { color: colorOf(item.key), borderRadius: item.value >= 0 ? [0, BAR_RADIUS + 2, BAR_RADIUS + 2, 0] : [BAR_RADIUS + 2, 0, 0, BAR_RADIUS + 2] } })),
+      label: { show: true, position: 'right', color: colors.text, fontFamily: colors.font, fontSize: 12, fontWeight: 600, formatter: (item: { value: number }) => `${moneyCompact(item.value)}${unitSuffix.value}` },
     }],
   }
 })

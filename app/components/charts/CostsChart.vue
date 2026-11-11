@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import type { EChartsCoreOption } from 'echarts/core'
-import { escapeHtml, useChartTheme } from '../../composables/useChartTheme'
+import { useChartTheme } from '../../composables/useChartTheme'
+import { BAR_RADIUS, categoryAxis, chartGrid, legendTop, tooltipCard, valueAxis } from '../../utils/chartOptions'
 import type { CostSeries } from '../../utils/chartSeries'
-import { money, moneyCompact } from '../../utils/format'
+import { money } from '../../utils/format'
 import ChartCanvas from './ChartCanvas.vue'
 
 /** Barras apiladas por periodo: una serie por categoría de costo, más comisión y gastos varios. */
 const props = defineProps<{ costs: CostSeries }>()
 
-const { palette, baseOption } = useChartTheme()
+const { palette, baseOption, axisPointer } = useChartTheme()
 
-interface AxisItem { axisValueLabel: string; marker: string; seriesName: string; value: number }
+interface AxisItem { axisValueLabel: string; color: string; seriesName: string; value: number }
 
 const hasAmounts = computed(() => props.costs.series.some(entry => entry.data.some(amount => amount > 0)))
 
@@ -20,25 +21,27 @@ const option = computed<EChartsCoreOption>(() => {
   return {
     ...baseOption.value,
     color: colors.series,
-    grid: { left: 8, right: 12, top: 56, bottom: 4, containLabel: true },
-    legend: { top: 0, type: 'scroll', icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: colors.textSecondary } },
+    grid: chartGrid(56),
+    legend: legendTop(colors),
     tooltip: {
       ...baseOption.value.tooltip,
       trigger: 'axis',
-      axisPointer: { type: 'shadow', shadowStyle: { color: colors.accent, opacity: 0.08 } },
+      axisPointer: axisPointer.value,
       formatter: (items: AxisItem[]) => {
         const visible = items.filter(item => item.value > 0)
-        const total = visible.reduce((sum, item) => sum + item.value, 0)
-        return `<b>${escapeHtml(items[0]?.axisValueLabel ?? '')}</b>`
-          + visible.map(item => `<div>${item.marker} ${escapeHtml(item.seriesName)}: <b>${money(item.value)}</b></div>`).join('')
-          + `<div style="margin-top:4px">Total: <b>${money(total)}</b></div>`
+        return tooltipCard({
+          title: items[0]?.axisValueLabel ?? '',
+          rows: visible.map(item => ({ color: item.color, label: item.seriesName, value: money(item.value) })),
+          footer: { label: 'Total', value: money(visible.reduce((sum, item) => sum + item.value, 0)) },
+        })
       },
     },
-    xAxis: { type: 'category', data: props.costs.labels, axisLine: { lineStyle: { color: colors.border } }, axisTick: { show: false }, axisLabel: { color: colors.muted, hideOverlap: true } },
-    yAxis: { type: 'value', axisLabel: { color: colors.muted, formatter: moneyCompact }, splitLine: { lineStyle: { color: colors.border } } },
+    xAxis: categoryAxis(colors, props.costs.labels),
+    yAxis: valueAxis(colors),
     series: props.costs.series.map((entry, index) => ({
       name: entry.name, type: 'bar', stack: 'costs', data: entry.data, barMaxWidth: 36,
-      itemStyle: index === lastIndex ? { borderRadius: [6, 6, 0, 0] } : undefined,
+      itemStyle: { borderColor: colors.surface, borderWidth: 1, ...(index === lastIndex ? { borderRadius: [BAR_RADIUS, BAR_RADIUS, 0, 0] } : {}) },
+      emphasis: { focus: 'series' },
     })),
   }
 })

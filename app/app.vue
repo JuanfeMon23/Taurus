@@ -32,8 +32,6 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
 </script>
 
 <template>
-  <!-- Nuxt UI solo para Estadísticas: sin toaster propio (los avisos usan el de abajo) y overlays dentro de `.ui-scope`. -->
-  <UApp :toaster="null" portal="#ui-portal">
   <div class="app desktop" :style="{ '--sidebar-w': collapsed ? '72px' : '232px' }">
     <AppSidebar v-model:collapsed="collapsed" :items="tabs" :active="current.key" @select="select" />
     <NuxtPwaManifest />
@@ -56,7 +54,7 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
     <main :class="{ wide: current.key === 'hoy' }">
       <Transition name="page" mode="out-in">
         <KeepAlive>
-          <component :is="current.view" :key="current.key" :class="{ 'ui-scope': current.key === 'stats' }" />
+          <component :is="current.view" :key="current.key" />
         </KeepAlive>
       </Transition>
     </main>
@@ -68,9 +66,7 @@ const today = rawDate.charAt(0).toUpperCase() + rawDate.slice(1)
         {{ toast.text }}
       </div>
     </TransitionGroup>
-    <div id="ui-portal" class="ui-scope" />
   </div>
-  </UApp>
 </template>
 
 <style>

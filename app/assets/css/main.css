@@ -1,13 +1,4 @@
-/* Tailwind y Nuxt UI solo para Estadísticas. Se omite el reset global (preflight) de Tailwind para que el resto de la app
-   conserve su aspecto: su equivalente vive en `ui-scope.css` y solo rige dentro de `.ui-scope` (Estadísticas y los overlays de Nuxt UI). */
-@layer theme, base, components, utilities;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
-@import "@nuxt/ui";
-@import "./ui-scope.css" layer(base);
-
-/* El CSS propio vive en la capa `components`: gana al reset de `ui-scope` y pierde ante las utilidades de Nuxt UI. */
-@layer components {
+/* Sistema de diseño propio de Taurus: tokens, tema claro/oscuro (clases `.light`/`.dark` en <html>) y primitivas. Sin Tailwind ni librería de UI. */
 /* ───────── Tokens ───────── */
 :root {
   color-scheme: dark;
@@ -33,30 +24,13 @@
   --info: #60a5fa;
   --info-soft: rgba(96, 165, 250, 0.14);
   --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  /* Acento para trazos de gráficas (contraste >= 3:1 sobre la superficie en ambos temas). */
+  --accent-chart: var(--accent);
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #2f9e2f; --s7: #9085e9; --s8: #e66767;
   --radius: 18px;
   --radius-sm: 12px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
-  /* Nuxt UI: sus tokens semánticos apuntan a los de Taurus (una sola paleta para ambos sistemas). */
-  --ui-primary: var(--accent);
-  --ui-success: var(--pos);
-  --ui-info: var(--info);
-  --ui-warning: var(--accent);
-  --ui-error: var(--neg);
-  --ui-radius: 0.5rem;
-  --ui-bg: var(--surface);
-  --ui-bg-muted: var(--surface-2);
-  --ui-bg-elevated: var(--surface-2);
-  --ui-bg-accented: var(--surface-3);
-  --ui-border: var(--border);
-  --ui-border-muted: var(--border);
-  --ui-border-accented: var(--border-strong);
-  --ui-text: var(--text-2);
-  --ui-text-toned: var(--text-2);
-  --ui-text-muted: var(--muted);
-  --ui-text-dimmed: var(--muted);
-  --ui-text-highlighted: var(--text);
 }
 
 :root.light {
@@ -83,8 +57,10 @@
   --info: #2563eb;
   --info-soft: rgba(37, 99, 235, 0.1);
   --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
-  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --accent-chart: #d97706;
+  /* s3, s4 y s5 oscurecidos respecto al original para llegar a >= 3:1 sobre la superficie blanca. */
+  --s1: #2a78d6; --s2: #eb6834; --s3: #12936a; --s4: #b87d00;
+  --s5: #cf4478; --s6: #008300; --s7: #6250d6; --s8: #e34948;
 }
 
 /* ───────── Base ───────── */
@@ -144,6 +120,16 @@ input, select { font: inherit; color: inherit; }
 .input-icon { position: relative; }
 .input-icon > svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
 .input-icon > .input { padding-left: 42px; }
+
+.select { position: relative; display: block; }
+.select > .input { appearance: none; padding-right: 40px; cursor: pointer; }
+.select > svg { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+
+.notice { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--text-2); }
+.notice > svg { flex-shrink: 0; margin-top: 2px; }
+.notice b { color: var(--text); }
+.notice.info { background: var(--info-soft); }
+.notice.info > svg { color: var(--info); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -248,5 +234,4 @@ input, select { font: inherit; color: inherit; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; animation-delay: 0ms !important; }
-}
 }

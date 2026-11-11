@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import type { EChartsCoreOption } from 'echarts/core'
-import { escapeHtml, useChartTheme } from '../../composables/useChartTheme'
+import { useChartTheme } from '../../composables/useChartTheme'
+import { BAR_RADIUS, categoryAxis, chartGrid, legendTop, smoothLine, tooltipCard, valueAxis } from '../../utils/chartOptions'
 import type { IncomeSeries } from '../../utils/chartSeries'
-import { money, moneyCompact } from '../../utils/format'
+import { money } from '../../utils/format'
 import ChartCanvas from './ChartCanvas.vue'
 
 /** Bruto apilado por medio de pago (uno por entrada del catálogo) más líneas de neto y neto tras gastos, por periodo. */
@@ -13,39 +14,42 @@ const props = defineProps<{
   netAfterExpenses: number[]
 }>()
 
-const { palette, baseOption } = useChartTheme()
-// Posiciones de la paleta para las barras (0 y 6 eran efectivo y transferencia; las líneas usan el acento y la 1).
+const { palette, baseOption, axisPointer } = useChartTheme()
+// Posiciones de la paleta para las barras. Las líneas: «Neto» sólida con el acento y «Neto tras gastos» discontinua en tono neutro.
 const BAR_COLOR_INDEXES = [0, 6, 2, 3, 4, 5]
 
-interface AxisItem { axisValueLabel: string; marker: string; seriesName: string; value: number }
+interface AxisItem { axisValueLabel: string; color: string; seriesName: string; value: number | null }
+
+// Un periodo sin ningún movimiento (bruto, neto y neto tras gastos en 0) no dibuja punto: queda un hueco en vez de una caída a 0.
+const hasActivity = (index: number) => props.income.some(series => (series.data[index] ?? 0) !== 0) || props.net[index] !== 0 || props.netAfterExpenses[index] !== 0
+const activeOnly = (values: number[]) => values.map((value, index) => (hasActivity(index) ? value : null))
 
 const option = computed<EChartsCoreOption>(() => {
   const colors = palette.value
-  const line = (name: string, data: number[], color: string) => ({
-    name, type: 'line', data, color, smooth: 0.25, symbol: 'circle', symbolSize: 7, lineStyle: { width: 3 }, z: 5,
-  })
   return {
     ...baseOption.value,
-    grid: { left: 8, right: 12, top: 44, bottom: 4, containLabel: true },
-    legend: { top: 0, icon: 'roundRect', itemWidth: 12, itemHeight: 8, textStyle: { color: colors.textSecondary } },
+    grid: chartGrid(56),
+    legend: legendTop(colors),
     tooltip: {
       ...baseOption.value.tooltip,
       trigger: 'axis',
-      axisPointer: { type: 'shadow', shadowStyle: { color: colors.accent, opacity: 0.08 } },
-      formatter: (items: AxisItem[]) =>
-        `<b>${escapeHtml(items[0]?.axisValueLabel ?? '')}</b>`
-        + items.map(item => `<div>${item.marker} ${escapeHtml(item.seriesName)}: <b>${money(item.value)}</b></div>`).join(''),
+      axisPointer: axisPointer.value,
+      formatter: (items: AxisItem[]) => tooltipCard({
+        title: items[0]?.axisValueLabel ?? '',
+        rows: items.filter(item => typeof item.value === 'number').map(item => ({ color: item.color, label: item.seriesName, value: money(item.value!) })),
+      }),
     },
-    xAxis: { type: 'category', data: props.labels, axisLine: { lineStyle: { color: colors.border } }, axisTick: { show: false }, axisLabel: { color: colors.muted, hideOverlap: true } },
-    yAxis: { type: 'value', axisLabel: { color: colors.muted, formatter: moneyCompact }, splitLine: { lineStyle: { color: colors.border } } },
+    xAxis: categoryAxis(colors, props.labels),
+    yAxis: valueAxis(colors),
     series: [
       ...props.income.map((series, index) => ({
         name: series.name, type: 'bar', stack: 'gross', data: series.data, barMaxWidth: 36,
         color: colors.series[BAR_COLOR_INDEXES[index % BAR_COLOR_INDEXES.length]! % colors.series.length],
-        ...(index === props.income.length - 1 ? { itemStyle: { borderRadius: [6, 6, 0, 0] } } : {}),
+        itemStyle: { borderColor: colors.surface, borderWidth: 1, ...(index === props.income.length - 1 ? { borderRadius: [BAR_RADIUS, BAR_RADIUS, 0, 0] } : {}) },
+        emphasis: { focus: 'series' },
       })),
-      line('Neto', props.net, colors.accent),
-      line('Neto tras gastos', props.netAfterExpenses, colors.series[1]!),
+      smoothLine(colors, 'Neto', activeOnly(props.net), colors.accent),
+      smoothLine(colors, 'Neto tras gastos', activeOnly(props.netAfterExpenses), colors.textSecondary, { dashed: true }),
     ],
   }
 })

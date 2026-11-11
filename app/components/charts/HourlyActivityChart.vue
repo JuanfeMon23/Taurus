@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EChartsCoreOption } from 'echarts/core'
 import { useChartTheme } from '../../composables/useChartTheme'
+import { tooltipCard } from '../../utils/chartOptions'
 import { formatDuration } from '../../utils/trip'
 import ChartCanvas from './ChartCanvas.vue'
 
@@ -30,19 +31,27 @@ const option = computed<EChartsCoreOption>(() => {
     tooltip: {
       ...baseOption.value.tooltip,
       trigger: 'item',
-      formatter: (item: { dataIndex: number; value: number | null }) => {
-        const title = `<b>${hourLabel(item.dataIndex)} – ${hourLabel((item.dataIndex + 1) % 24)}</b>`
-        if (!hasShiftData.value) return `${title}<div>${formatDuration(Math.round(item.value ?? 0)) || '0 min'} activos</div>`
+      formatter: (item: { dataIndex: number; value: number | null; color: string }) => {
+        const title = `${hourLabel(item.dataIndex)} – ${hourLabel((item.dataIndex + 1) % 24)}`
+        if (!hasShiftData.value) return tooltipCard({ title, rows: [{ color: item.color, label: 'Activos', value: formatDuration(Math.round(item.value ?? 0)) || '0 min' }] })
         const active = Math.round(props.hourlyMinutes[item.dataIndex] ?? 0)
         const shift = Math.round(props.hourlyShiftMinutes[item.dataIndex] ?? 0)
-        return `${title}<div>${formatDuration(active) || '0 min'} activos de ${formatDuration(shift)} de turno (${Math.round((item.value ?? 0) * 100)} %)</div>`
+        return tooltipCard({
+          title,
+          rows: [
+            { color: item.color, label: 'Activos', value: formatDuration(active) || '0 min' },
+            { label: 'De turno', value: formatDuration(shift) },
+          ],
+          footer: { label: 'Aprovechamiento', value: `${Math.round((item.value ?? 0) * 100)} %` },
+        })
       },
     },
-    polar: { radius: ['18%', '86%'], center: ['50%', '50%'] },
+    polar: { radius: ['36%', '88%'], center: ['50%', '50%'] },
     angleAxis: {
       type: 'category', data: props.hourlyMinutes.map((_minutes, hour) => hour), startAngle: 90, clockwise: true,
-      axisLabel: { color: colors.muted, interval: 2, formatter: (hour: string) => `${hour} h` },
-      axisLine: { lineStyle: { color: colors.border } }, axisTick: { show: false },
+      axisLabel: { color: colors.muted, fontSize: 11, interval: 2, formatter: (hour: string) => `${hour} h` },
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { show: true, lineStyle: { color: colors.border, type: [4, 4] } },
     },
     radiusAxis: { type: 'value', show: false, max: peak },
     series: [{
@@ -51,11 +60,11 @@ const option = computed<EChartsCoreOption>(() => {
         value,
         itemStyle: { color: hour === props.bestHour ? colors.accent : colors.series[0], opacity: hour === props.bestHour ? 1 : 0.35 + 0.65 * ((value ?? 0) / peak) },
       })),
-      backgroundStyle: { color: colors.surfaceRaised }, showBackground: true,
+      backgroundStyle: { color: colors.surfaceRaised, opacity: 0.6 }, showBackground: true,
     }],
     graphic: props.bestHour === null ? undefined : [{
       type: 'text', left: 'center', top: 'middle', silent: true,
-      style: { text: `${hourLabel(props.bestHour)}\nmejor franja`, textAlign: 'center', fill: colors.text, fontSize: 12, fontWeight: 600, fontFamily: colors.font, lineHeight: 16 },
+      style: { text: `${hourLabel(props.bestHour)}\nmejor franja`, textAlign: 'center', fill: colors.text, fontSize: 11, fontWeight: 600, fontFamily: colors.font, lineHeight: 15 },
     }],
   }
 })
