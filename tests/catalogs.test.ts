@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activeEntries, catalogEntryInUse, defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, slugifyCode, sortCatalog, withReferencedCatalogs } from '../app/utils/catalogs'
+import { accountIsCashBox, activeEntries, cashBoxAccountId, catalogEntryInUse, defaultMethodId, entryName, methodAccountId, methodAffectsCash, movementSign, movementTypeHasCategory, movementTypeRequiresDestination, slugifyCode, sortCatalog, withReferencedCatalogs } from '../app/utils/catalogs'
 import { emptySnapshot } from '../app/services/types'
 import { testCatalogs } from './fixtures/catalogs'
 
@@ -113,8 +113,10 @@ describe('catalogEntryInUse con modos de tarifa', () => {
 
 describe('withReferencedCatalogs', () => {
   const rateMode = { id: 'per-km-flat', name: 'Fijo', usesRatePerKm: true, usesCostInterval: false, sortOrder: 2, active: true, updatedAt: 't' }
-  const method = { id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: 't' }
-  const state = { ...emptySnapshot(), rateModes: [rateMode], paymentMethods: [method] }
+  const method = { id: 'cash', name: 'Efectivo', accountId: 'caja', affectsCash: true, sortOrder: 0, active: true, updatedAt: 't' }
+  const cashBox = { id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true, updatedAt: 't' }
+  const deposit = { id: 'deposito', name: 'Depósito', initialBalance: 0, isCashBox: false, sortOrder: 2, active: true, updatedAt: 't' }
+  const state = { ...emptySnapshot(), rateModes: [rateMode], paymentMethods: [method], accounts: [cashBox, deposit] }
   const dirtyCategory = { id: 'c1', name: 'Seguro', rateMode: 'per-km-flat', ratePerKm: 18, active: true, updatedAt: 't' }
 
   it('agrega al mismo PUT el modo que usa la categoría sucia', () => {
@@ -122,12 +124,16 @@ describe('withReferencedCatalogs', () => {
     expect(result.categories).toEqual([dirtyCategory])
     expect(result.rateModes).toEqual([rateMode])
   })
-  it('agrega el medio de pago de servicios y movimientos sin repetirlo', () => {
+  it('agrega el medio de pago de los servicios sin repetirlo', () => {
     const changes = {
-      services: [{ id: 's1', date: '2026-11-01', amount: 1, method: 'cash', updatedAt: 't' }],
-      movements: [{ id: 'm1', date: '2026-11-01', type: 'x', amount: 1, method: 'cash', updatedAt: 't' }],
+      services: [{ id: 's1', date: '2026-11-01', amount: 1, method: 'cash', updatedAt: 't' }, { id: 's2', date: '2026-11-01', amount: 1, method: 'cash', updatedAt: 't' }],
     }
     expect(withReferencedCatalogs(state, changes).paymentMethods).toEqual([method])
+  })
+  it('agrega las cuentas de origen y destino de los movimientos y la cuenta de los medios de pago', () => {
+    const movement = { id: 'm1', date: '2026-11-01', type: 'traslado', amount: 1, accountId: 'caja', toAccountId: 'deposito', updatedAt: 't' }
+    expect(withReferencedCatalogs(state, { movements: [movement] }).accounts).toEqual([cashBox, deposit])
+    expect(withReferencedCatalogs(state, { paymentMethods: [method] }).accounts).toEqual([cashBox])
   })
   it('no repite una entrada que ya viaja en los cambios ni toca lo que no se usa', () => {
     const changes = { categories: [dirtyCategory], rateModes: [{ ...rateMode, name: 'Editado' }] }
@@ -136,5 +142,43 @@ describe('withReferencedCatalogs', () => {
   })
   it('un código que el estado local no tiene se deja al backend (no inventa entradas)', () => {
     expect(withReferencedCatalogs(state, { categories: [{ ...dirtyCategory, rateMode: 'nope' }] }).rateModes).toBeUndefined()
+  })
+})
+
+describe('cuentas en los catálogos', () => {
+  const { accounts, paymentMethods, movementTypes } = testCatalogs()
+  it('la caja es la cuenta marcada isCashBox', () => {
+    expect(cashBoxAccountId(accounts)).toBe('caja')
+    expect(cashBoxAccountId([])).toBeUndefined()
+  })
+  it('regla segura: una cuenta fuera del catálogo, o sin cuenta, cuenta como caja', () => {
+    expect(accountIsCashBox(accounts, 'caja')).toBe(true)
+    expect(accountIsCashBox(accounts, 'deposito')).toBe(false)
+    expect(accountIsCashBox(accounts, 'nope')).toBe(true)
+    expect(accountIsCashBox(accounts, undefined)).toBe(true)
+  })
+  it('el medio de pago lleva a su cuenta; sin código, el medio por defecto', () => {
+    expect(methodAccountId(paymentMethods, 'transfer')).toBe('transferencias')
+    expect(methodAccountId(paymentMethods, undefined)).toBe('caja')
+    expect(methodAccountId(paymentMethods, 'nope')).toBeUndefined()
+  })
+  it('el tipo pide destino según su marca; un código desconocido no', () => {
+    expect(movementTypeRequiresDestination(movementTypes, 'traslado')).toBe(true)
+    expect(movementTypeRequiresDestination(movementTypes, 'expense')).toBe(false)
+    expect(movementTypeRequiresDestination(movementTypes, 'nope')).toBe(false)
+  })
+  it('una cuenta usada por un movimiento (origen o destino) o por un medio vivo solo se desactiva', () => {
+    const snapshot = {
+      ...emptySnapshot(),
+      movements: [
+        { id: 'm1', date: '2026-11-01', type: 'traslado', amount: 1, accountId: 'caja', toAccountId: 'deposito', updatedAt: 't' },
+        { id: 'm2', date: '2026-11-01', type: 'expense', amount: 1, accountId: 'ahorros', updatedAt: 't', deleted: true },
+      ],
+      paymentMethods: [{ id: 'transfer', name: 'Transferencia', accountId: 'transferencias', affectsCash: false, sortOrder: 1, active: true, updatedAt: 't' }],
+    }
+    expect(catalogEntryInUse(snapshot, 'accounts', 'caja')).toBe(true)
+    expect(catalogEntryInUse(snapshot, 'accounts', 'deposito')).toBe(true)
+    expect(catalogEntryInUse(snapshot, 'accounts', 'transferencias')).toBe(true)
+    expect(catalogEntryInUse(snapshot, 'accounts', 'ahorros')).toBe(false)
   })
 })

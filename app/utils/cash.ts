@@ -1,9 +1,10 @@
-import type { CashDay, DayRecord, DepositMovement, MovementTypeEntry, PaymentMethod } from '../services/types'
-import { defaultMethodId, methodAffectsCash, movementSign } from './catalogs'
+import type { Account, CashDay, DayRecord, MovementTypeEntry, PaymentMethod } from '../services/types'
+import { accountIsCashBox, defaultMethodId, methodAffectsCash, movementAccountId, movementSign, movementTypeRequiresDestination } from './catalogs'
 import { tripTotal } from './trip'
 
 /** Catálogos que necesita el cálculo de caja. */
 export interface CashCatalogs {
+  accounts: Account[]
   paymentMethods: PaymentMethod[]
   movementTypes: MovementTypeEntry[]
 }
@@ -16,10 +17,12 @@ export interface CashSummary {
   nonCashIncome: number
   /** Ingresos de viajes por código de medio de pago. */
   incomeByMethod: Map<string, number>
-  /** Movimientos que suman / restan al efectivo (solo los de medios que afectan la caja). */
+  /** Movimientos que suman / restan al efectivo (solo los de la cuenta caja). */
   inflows: number
   outflows: number
-  /** Total por código de tipo de movimiento (solo medios que afectan la caja). */
+  /** Traslados desde otras cuentas que llegan a la caja. */
+  transfersIn: number
+  /** Total por código de tipo de movimiento (solo los de la cuenta caja). */
   totalsByType: Map<string, number>
   expected: number
   counted?: number
@@ -28,8 +31,8 @@ export interface CashSummary {
 }
 
 /**
- * Efectivo esperado = apertura + ingresos en medios que afectan la caja + Σ movimientos × signo del tipo (solo medios que afectan la caja).
- * Reglas seguras: tipo fuera del catálogo = no mueve el efectivo; medio fuera del catálogo = afecta la caja; sin medio = medio por defecto.
+ * Efectivo esperado = apertura + ingresos en medios que afectan la caja + Σ movimientos de la cuenta caja × signo del tipo + traslados que llegan a la caja.
+ * Reglas seguras: tipo fuera del catálogo = no mueve el efectivo; medio o cuenta fuera del catálogo = caja; movimiento viejo sin cuenta = la de su medio.
  */
 export function cashSummary(day: DayRecord | null, cash: CashDay | null, catalogs: CashCatalogs): CashSummary {
   const incomeByMethod = new Map<string, number>()
@@ -45,18 +48,24 @@ export function cashSummary(day: DayRecord | null, cash: CashDay | null, catalog
   const totalsByType = new Map<string, number>()
   let inflows = 0
   let outflows = 0
+  let transfersIn = 0
   for (const movement of cash?.movements ?? []) {
-    if (!methodAffectsCash(catalogs.paymentMethods, movement.method)) continue
+    const arrivesInCashBox = movementTypeRequiresDestination(catalogs.movementTypes, movement.type)
+      && catalogs.accounts.find(account => account.id === movement.toAccountId)?.isCashBox === true
+    if (!accountIsCashBox(catalogs.accounts, movementAccountId(movement, catalogs))) {
+      if (arrivesInCashBox) transfersIn += movement.amount
+      continue
+    }
     totalsByType.set(movement.type, (totalsByType.get(movement.type) ?? 0) + movement.amount)
     const sign = movementSign(catalogs.movementTypes, movement.type)
     if (sign > 0) inflows += movement.amount
     else if (sign < 0) outflows += movement.amount
   }
   const opening = cash?.opening ?? 0
-  const expected = cash ? opening + cashIncome + inflows - outflows : 0
+  const expected = cash ? opening + cashIncome + inflows + transfersIn - outflows : 0
   const counted = cash?.closedAt ? cash.counted : undefined
   return {
-    opening, cashIncome, nonCashIncome, incomeByMethod, inflows, outflows, totalsByType, expected,
+    opening, cashIncome, nonCashIncome, incomeByMethod, inflows, outflows, transfersIn, totalsByType, expected,
     counted,
     difference: counted !== undefined ? counted - expected : undefined,
   }
@@ -80,10 +89,6 @@ export function validateClosing(input: { expected: number; counted?: number | nu
   }
   return null
 }
-
-/** Saldo del depósito = Σ lo depositado en las cajas − Σ salidas del depósito. */
-export const depositBalance = (cashes: CashDay[], outflows: DepositMovement[]) =>
-  cashes.reduce((total, cash) => total + (cash.toDeposit ?? 0), 0) - outflows.reduce((total, outflow) => total + outflow.amount, 0)
 
 /** Apertura sugerida: lo que quedó en caja en el cierre más reciente anterior a `date`. */
 export function suggestedOpening(cashes: CashDay[], days: DayRecord[], date: string, catalogs: CashCatalogs): number | undefined {

@@ -1,5 +1,6 @@
 """Importar aquí los models.py de cada módulo para que Alembic los vea."""
 
+from app.modules.accounts import models as accounts  # noqa: F401
 from app.modules.cash import models as cash  # noqa: F401
 from app.modules.catalogs import models as catalogs  # noqa: F401
 from app.modules.categories import models as categories  # noqa: F401

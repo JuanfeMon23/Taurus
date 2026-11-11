@@ -54,6 +54,7 @@ async def test_get_devuelve_todas_las_colecciones(client: AsyncClient) -> None:
     response = await client.get(URL)
     assert response.status_code == 200
     assert set(response.json()) == {
+        "accounts",
         "categories",
         "days",
         "services",
@@ -321,28 +322,36 @@ async def test_to_deposit_se_actualiza_con_lww(client: AsyncClient) -> None:
     assert (await get_col(client, "cash"))[0]["toDeposit"] == 20
 
 
-async def test_deposit_movements_put_y_get(client: AsyncClient) -> None:
+async def test_deposit_movements_se_convierten_en_movimientos_del_deposito(
+    client: AsyncClient,
+) -> None:
     response = await put(client, {"depositMovements": [dep(note="banco")]})
     assert response.json()["applied"]["depositMovements"] == 1
-    deposit_record = (await get_col(client, "depositMovements"))[0]
-    assert (
-        deposit_record["id"] == "d1"
-        and deposit_record["date"] == "2026-11-04"
-        and deposit_record["amount"] == 10
-    )
-    assert deposit_record["note"] == "banco" and deposit_record["deleted"] is False
-    assert deposit_record["updatedAt"].startswith("2026-11-04T10:00:00")
+    converted = {rec["id"]: rec for rec in await get_col(client, "movements")}["d1"]
+    assert converted["type"] == "withdrawal" and converted["accountId"] == "deposito"
+    assert converted["date"] == "2026-11-04" and converted["amount"] == 10
+    assert converted["note"] == "banco" and converted["deleted"] is False
+    assert "toAccountId" not in converted and "method" not in converted
+    assert converted["updatedAt"].startswith("2026-11-04T10:00:00")
+
+
+async def test_get_ya_no_envia_deposit_movements(client: AsyncClient) -> None:
+    await put(client, {"depositMovements": [dep()]})
+    assert await get_col(client, "depositMovements") == []
 
 
 async def test_deposit_movements_lww_y_lapida(client: AsyncClient) -> None:
+    async def stored_deposit() -> dict[str, Any]:
+        return {rec["id"]: rec for rec in await get_col(client, "movements")}["d1"]
+
     await put(client, {"depositMovements": [dep(amount=20, updatedAt=T2)]})
     response = await put(client, {"depositMovements": [dep(amount=99)]})
     assert response.json()["skipped"]["depositMovements"] == 1
-    assert (await get_col(client, "depositMovements"))[0]["amount"] == 20
+    assert (await stored_deposit())["amount"] == 20
     await put(client, {"depositMovements": [dep(amount=20, updatedAt=T2, deleted=True)]})
-    assert (await get_col(client, "depositMovements"))[0]["deleted"] is True
+    assert (await stored_deposit())["deleted"] is True
     await put(client, {"depositMovements": [dep(amount=5, updatedAt=T2)]})
-    assert (await get_col(client, "depositMovements"))[0]["deleted"] is True
+    assert (await stored_deposit())["deleted"] is True
 
 
 async def test_deposit_movements_monto_negativo_422(client: AsyncClient) -> None:
@@ -487,15 +496,17 @@ async def test_movimiento_categoria_ausente_o_null_se_omite(client: AsyncClient)
         assert "categoryId" not in record
 
 
-async def test_movimiento_metodo_por_defecto_es_cash(client: AsyncClient) -> None:
+async def test_movimiento_sin_metodo_no_guarda_metodo_y_va_a_la_caja(client: AsyncClient) -> None:
     await put(client, {"movements": [movement(), movement(id="m2", method=None)]})
-    assert [record["method"] for record in await get_col(client, "movements")] == ["cash", "cash"]
+    for record in await get_col(client, "movements"):
+        assert "method" not in record and record["accountId"] == "caja"
 
 
 async def test_movimiento_metodo_transfer_y_lww(client: AsyncClient) -> None:
     await put(client, {"movements": [movement(method="transfer", updatedAt=T2)]})
     await put(client, {"movements": [movement(method="cash", updatedAt=T1)]})
-    assert (await get_col(client, "movements"))[0]["method"] == "transfer"
+    stored = (await get_col(client, "movements"))[0]
+    assert stored["method"] == "transfer" and stored["accountId"] == "transferencias"
 
 
 async def test_movimiento_metodo_o_tipo_vacio_y_desconocido_422(
@@ -632,7 +643,8 @@ def catalog_item(**overrides: Any) -> dict[str, Any]:
 
 
 CATALOGS = {
-    "paymentMethods": {"affectsCash": True},
+    "accounts": {"initialBalance": 25.5, "isCashBox": False},
+    "paymentMethods": {"accountId": "caja", "affectsCash": True},
     "movementTypes": {"sign": -1},
     "fundMovementTypes": {"sign": 1},
     "expenseCategories": {},
@@ -854,3 +866,151 @@ async def test_turno_con_template_id_inexistente_devuelve_422(client: AsyncClien
     assert error["code"] == "unknown_catalog_code"
     assert error["details"][0]["campo"] == "shifts.templateId"
     assert await get_col(client, "shifts") == []
+
+
+# --- Cuentas: Caja, Transferencias y Depósito con saldo propio -------------------------------
+
+
+def transfer(**overrides: Any) -> dict[str, Any]:
+    fields = {"type": "traslado", "accountId": "caja", "toAccountId": "deposito", **overrides}
+    return movement(id="t1", **fields)
+
+
+async def assert_account_rule_violation(response: Any, field: str) -> None:
+    assert response.status_code == 422
+    error = response.json()
+    assert error["code"] == "account_rule_violation"
+    assert [detail["campo"] for detail in error["details"]] == [field]
+
+
+async def skip_account_rules(*_args: Any) -> None:
+    return None
+
+
+async def test_cuentas_semilla_en_camel_case(client: AsyncClient) -> None:
+    accounts = {rec["id"]: rec for rec in await get_col(client, "accounts")}
+    assert set(accounts) >= {"caja", "transferencias", "deposito"}
+    assert accounts["caja"]["isCashBox"] is True and accounts["caja"]["initialBalance"] == 0
+    assert accounts["deposito"]["isCashBox"] is False
+
+
+async def test_semilla_del_tipo_traslado_exige_destino(client: AsyncClient) -> None:
+    types = {rec["id"]: rec for rec in await get_col(client, "movementTypes")}
+    assert types["traslado"]["requiresDestination"] is True
+    assert types["expense"]["requiresDestination"] is False
+
+
+async def test_medio_de_pago_trae_su_cuenta(client: AsyncClient) -> None:
+    methods = {rec["id"]: rec for rec in await get_col(client, "paymentMethods")}
+    assert methods["cash"]["accountId"] == "caja"
+    assert methods["transfer"]["accountId"] == "transferencias"
+
+
+async def test_medio_de_pago_sin_cuenta_422(client: AsyncClient) -> None:
+    response = await put(client, {"paymentMethods": [catalog_item(affectsCash=False)]})
+    assert response.status_code == 422
+    assert response.json()["details"][0]["campo"] == "paymentMethods.0.accountId"
+
+
+async def test_medio_de_pago_con_cuenta_desconocida_422(client: AsyncClient) -> None:
+    item = catalog_item(accountId="nada", affectsCash=False)
+    response = await put(client, {"paymentMethods": [item]})
+    assert response.status_code == 422
+    assert response.json()["code"] == "unknown_catalog_code"
+    assert response.json()["details"][0]["campo"] == "paymentMethods.accountId"
+
+
+async def test_medio_de_pago_con_affects_cash_incoherente_422(client: AsyncClient) -> None:
+    for account_id, affects_cash in (("caja", False), ("deposito", True)):
+        item = catalog_item(accountId=account_id, affectsCash=affects_cash)
+        response = await put(client, {"paymentMethods": [item]})
+        await assert_account_rule_violation(response, "paymentMethods.affectsCash")
+    assert "tst-item" not in {rec["id"] for rec in await get_col(client, "paymentMethods")}
+
+
+async def test_cuenta_nueva_y_medio_de_pago_en_el_mismo_put(client: AsyncClient) -> None:
+    body = {
+        "paymentMethods": [catalog_item(accountId="nueva", affectsCash=False)],
+        "accounts": [catalog_item(id="nueva", name="Nueva")],
+    }
+    assert (await put(client, body)).status_code == 200
+
+
+async def test_movimiento_con_cuenta_ida_y_vuelta(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(accountId="transferencias")]})
+    stored = (await get_col(client, "movements"))[0]
+    assert stored["accountId"] == "transferencias" and "toAccountId" not in stored
+
+
+async def test_traslado_caja_a_deposito_ida_y_vuelta(client: AsyncClient) -> None:
+    response = await put(client, {"movements": [transfer(amount=40)]})
+    assert response.status_code == 200
+    stored = (await get_col(client, "movements"))[0]
+    assert stored["accountId"] == "caja" and stored["toAccountId"] == "deposito"
+    assert stored["type"] == "traslado" and stored["amount"] == 40
+
+
+async def test_movimiento_con_cuenta_desconocida_422(client: AsyncClient) -> None:
+    for field in ("accountId", "toAccountId"):
+        response = await put(client, {"movements": [transfer(**{field: "nada"})]})
+        assert response.status_code == 422
+        assert response.json()["code"] == "unknown_catalog_code"
+        assert response.json()["details"][0]["campo"] == f"movements.{field}"
+
+
+async def test_traslado_sin_destino_422(client: AsyncClient) -> None:
+    response = await put(client, {"movements": [transfer(toAccountId=None)]})
+    await assert_account_rule_violation(response, "movements.toAccountId")
+    assert await get_col(client, "movements") == []
+
+
+async def test_movimiento_comun_con_destino_422(client: AsyncClient) -> None:
+    response = await put(client, {"movements": [movement(toAccountId="deposito")]})
+    await assert_account_rule_violation(response, "movements.toAccountId")
+
+
+async def test_traslado_a_la_misma_cuenta_422(client: AsyncClient) -> None:
+    response = await put(client, {"movements": [transfer(toAccountId="caja")]})
+    await assert_account_rule_violation(response, "movements.toAccountId")
+
+
+async def test_traslado_de_cliente_viejo_sin_cuenta_sale_de_la_caja(client: AsyncClient) -> None:
+    record = transfer()
+    del record["accountId"]
+    assert (await put(client, {"movements": [record]})).status_code == 200
+    assert (await get_col(client, "movements"))[0]["accountId"] == "caja"
+
+
+async def test_movimiento_de_cliente_viejo_toma_la_cuenta_del_medio(client: AsyncClient) -> None:
+    body = {
+        "paymentMethods": [catalog_item(id="tarjeta", accountId="deposito", affectsCash=False)],
+        "movements": [movement(method="tarjeta")],
+    }
+    assert (await put(client, body)).status_code == 200
+    assert (await get_col(client, "movements"))[0]["accountId"] == "deposito"
+
+
+async def test_red_de_seguridad_destino_de_los_triggers_se_traduce_a_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "check_account_rules", skip_account_rules)
+    response = await put(client, {"movements": [transfer(toAccountId=None)]})
+    await assert_account_rule_violation(response, "movements.toAccountId")
+    assert await get_col(client, "movements") == []
+
+
+async def test_red_de_seguridad_affects_cash_de_los_triggers_se_traduce_a_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "check_account_rules", skip_account_rules)
+    item = catalog_item(accountId="caja", affectsCash=False)
+    response = await put(client, {"paymentMethods": [item]})
+    await assert_account_rule_violation(response, "paymentMethods.affectsCash")
+
+
+async def test_red_de_seguridad_misma_cuenta_del_check_se_traduce_a_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "ensure_transfer_accounts_differ", lambda _records: None)
+    response = await put(client, {"movements": [transfer(toAccountId="caja")]})
+    await assert_account_rule_violation(response, "movements.toAccountId")

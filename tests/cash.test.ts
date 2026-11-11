@@ -16,9 +16,9 @@ describe('cashSummary', () => {
     const summary = cashSummary(
       day([{ amount: 40000 }, { amount: 30000, method: 'cash' }, { amount: 20000, method: 'transfer' }]),
       cash({ movements: [
-        { id: 'm1', type: 'expense', amount: 8000, note: 'gasolina' },
-        { id: 'm2', type: 'withdrawal', amount: 20000 },
-        { id: 'm3', type: 'deposit', amount: 5000 },
+        { id: 'm1', type: 'expense', amount: 8000, note: 'gasolina', accountId: 'caja' },
+        { id: 'm2', type: 'withdrawal', amount: 20000, accountId: 'caja' },
+        { id: 'm3', type: 'deposit', amount: 5000, accountId: 'caja' },
       ] }),
       catalogs,
     )
@@ -32,29 +32,60 @@ describe('cashSummary', () => {
     expect(summary.expected).toBe(50000 + 70000 - 8000 - 20000 + 5000)
   })
 
-  it('movimientos con un medio que no afecta la caja no la tocan; sin medio usan el medio por defecto', () => {
+  it('solo los movimientos de la cuenta caja mueven el efectivo; los de otras cuentas no la tocan', () => {
     const summary = cashSummary(day([{ amount: 10000 }]), cash({ movements: [
-      { id: 'm1', type: 'expense', amount: 8000 },
-      { id: 'm2', type: 'expense', amount: 5000, method: 'transfer', categoryId: 'parqueadero' },
-      { id: 'm3', type: 'withdrawal', amount: 3000, method: 'transfer' },
-      { id: 'm4', type: 'withdrawal', amount: 2000, method: 'cash' },
+      { id: 'm1', type: 'expense', amount: 8000, accountId: 'caja' },
+      { id: 'm2', type: 'expense', amount: 5000, accountId: 'transferencias', categoryId: 'parqueadero' },
+      { id: 'm3', type: 'withdrawal', amount: 3000, accountId: 'deposito' },
+      { id: 'm4', type: 'withdrawal', amount: 2000, accountId: 'caja' },
     ] }), catalogs)
     expect(summary.totalsByType.get('expense')).toBe(8000)
     expect(summary.totalsByType.get('withdrawal')).toBe(2000)
     expect(summary.expected).toBe(50000 + 10000 - 8000 - 2000)
   })
 
-  it('el signo y el efecto en caja salen del catálogo, no del código', () => {
+  it('un traslado desde la caja resta; uno que llega a la caja suma; uno entre otras cuentas no la toca', () => {
+    const summary = cashSummary(null, cash({ opening: 10000, movements: [
+      { id: 'sale', type: 'traslado', amount: 4000, accountId: 'caja', toAccountId: 'deposito' },
+      { id: 'entra', type: 'traslado', amount: 2500, accountId: 'transferencias', toAccountId: 'caja' },
+      { id: 'ajeno', type: 'traslado', amount: 900, accountId: 'transferencias', toAccountId: 'deposito' },
+    ] }), catalogs)
+    expect(summary.outflows).toBe(4000)
+    expect(summary.transfersIn).toBe(2500)
+    expect(summary.totalsByType.get('traslado')).toBe(4000)
+    expect(summary.expected).toBe(10000 - 4000 + 2500)
+  })
+
+  it('datos viejos sin cuenta: valen la cuenta de su medio de pago (o la caja si no hay medio)', () => {
+    const summary = cashSummary(day([{ amount: 10000 }]), cash({ opening: 0, movements: [
+      { id: 'a', type: 'expense', amount: 8000 },
+      { id: 'b', type: 'expense', amount: 5000, method: 'transfer' },
+      { id: 'c', type: 'withdrawal', amount: 2000, method: 'cash' },
+    ] as never }), catalogs)
+    expect(summary.expected).toBe(10000 - 8000 - 2000)
+  })
+
+  it('el signo y la cuenta caja salen del catálogo, no del código', () => {
     const custom = {
-      paymentMethods: [{ id: 'wallet', name: 'Billetera', affectsCash: false, sortOrder: 0, active: true }, { id: 'coins', name: 'Monedas', affectsCash: true, sortOrder: 1, active: true }],
-      movementTypes: [{ id: 'tip-out', name: 'Propina entregada', sign: -1 as const, sortOrder: 0, active: true }, { id: 'refund', name: 'Reembolso', sign: 1 as const, sortOrder: 1, active: true }],
+      accounts: [
+        { id: 'billetera', name: 'Billetera', initialBalance: 0, isCashBox: false, sortOrder: 0, active: true },
+        { id: 'monedero', name: 'Monedero', initialBalance: 0, isCashBox: true, sortOrder: 1, active: true },
+      ],
+      paymentMethods: [
+        { id: 'wallet', name: 'Billetera', accountId: 'billetera', affectsCash: false, sortOrder: 0, active: true },
+        { id: 'coins', name: 'Monedas', accountId: 'monedero', affectsCash: true, sortOrder: 1, active: true },
+      ],
+      movementTypes: [
+        { id: 'tip-out', name: 'Propina entregada', sign: -1 as const, hasCategory: false, requiresDestination: false, sortOrder: 0, active: true },
+        { id: 'refund', name: 'Reembolso', sign: 1 as const, hasCategory: false, requiresDestination: false, sortOrder: 1, active: true },
+      ],
     }
     const summary = cashSummary(
       day([{ amount: 1000, method: 'wallet' }, { amount: 2000, method: 'coins' }]),
       cash({ opening: 0, movements: [
-        { id: 'a', type: 'tip-out', amount: 300, method: 'coins' },
-        { id: 'b', type: 'refund', amount: 500, method: 'coins' },
-        { id: 'c', type: 'refund', amount: 900, method: 'wallet' },
+        { id: 'a', type: 'tip-out', amount: 300, accountId: 'monedero' },
+        { id: 'b', type: 'refund', amount: 500, accountId: 'monedero' },
+        { id: 'c', type: 'refund', amount: 900, accountId: 'billetera' },
       ] }),
       custom,
     )
@@ -63,10 +94,10 @@ describe('cashSummary', () => {
     expect(summary.expected).toBe(2000 - 300 + 500)
   })
 
-  it('regla segura: un tipo desconocido no mueve la caja y un medio desconocido cuenta como efectivo', () => {
+  it('regla segura: un tipo desconocido no mueve la caja y una cuenta desconocida cuenta como caja', () => {
     const summary = cashSummary(day([{ amount: 1000, method: 'nequi' }]), cash({ opening: 0, movements: [
-      { id: 'a', type: 'misterio', amount: 700 },
-      { id: 'b', type: 'expense', amount: 100, method: 'nequi' },
+      { id: 'a', type: 'misterio', amount: 700, accountId: 'caja' },
+      { id: 'b', type: 'expense', amount: 100, accountId: 'nequi' },
     ] }), catalogs)
     expect(summary.cashIncome).toBe(1000)
     expect(summary.expected).toBe(1000 - 100)

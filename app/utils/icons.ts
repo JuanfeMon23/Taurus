@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowLeftRight, ArrowUpCircle, ArrowUpFromLine, Banknote, Fuel, HandCoins, PiggyBank, Receipt, ShieldCheck, Wrench } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeftRight, ArrowUpCircle, ArrowUpFromLine, Banknote, Fuel, HandCoins, Landmark, PiggyBank, Receipt, ShieldCheck, Vault, Wallet, Wrench } from 'lucide-vue-next'
 
 /** Icono de una categoría de costo según su nombre. */
 export function categoryIcon(name: string) {
@@ -10,6 +10,7 @@ export function categoryIcon(name: string) {
 
 /* Íconos por código de catálogo: solo presentación; un código nuevo cae en el ícono genérico. */
 const METHOD_ICONS = { cash: Banknote, transfer: ArrowLeftRight }
+const ACCOUNT_ICONS = { caja: Wallet, transferencias: ArrowLeftRight, deposito: Vault }
 const MOVEMENT_ICONS = { expense: ArrowUpCircle, withdrawal: HandCoins, deposit: PiggyBank }
 const FUND_MOVEMENT_ICONS = { transfer: ArrowDownToLine, spend: ArrowUpFromLine }
 
@@ -17,6 +18,9 @@ const pick = <Icon>(icons: Record<string, Icon>, code: string, fallback: Icon): 
 
 /** Ícono de un medio de pago; el genérico depende de si mueve el efectivo. */
 export const methodIcon = (code: string, affectsCash: boolean) => pick(METHOD_ICONS, code, affectsCash ? Banknote : ArrowLeftRight)
+
+/** Ícono de una cuenta; el genérico depende de si es la caja. */
+export const accountIcon = (code: string, isCashBox: boolean) => pick(ACCOUNT_ICONS, code, isCashBox ? Wallet : Landmark)
 
 /** Ícono de un tipo de movimiento de caja; el genérico depende del signo. */
 export const movementIcon = (code: string, sign: number) => pick(MOVEMENT_ICONS, code, sign > 0 ? PiggyBank : ArrowUpCircle)

@@ -138,16 +138,43 @@ describe('taurus: depósito', () => {
     expect((await taurus.repo.getCash('2026-11-03'))?.toDeposit).toBeUndefined()
   })
 
-  it('registra salidas del depósito y las elimina con lápida', async () => {
+  it('una salida del depósito es un movimiento de la cuenta deposito: se lista y se elimina con lápida', async () => {
     const taurus = await setup()
-    const deposit = await taurus.repo.saveDepositMovement({ date: '2026-11-03', amount: 20000, note: 'banco' })
-    expect(deposit.id).toBeTruthy()
-    expect(await taurus.repo.listDepositMovements()).toEqual([{ id: deposit.id, date: '2026-11-03', amount: 20000, note: 'banco' }])
-    await taurus.repo.deleteDepositMovement(deposit.id)
-    expect(await taurus.repo.listDepositMovements()).toEqual([])
-    const snapshot = await taurus.snapshot()
-    expect(snapshot.depositMovements).toHaveLength(1)
-    expect(snapshot.depositMovements[0]!.deleted).toBe(true)
+    await taurus.repo.putCash({ date: '2026-11-03', opening: 0, openedAt: 'x', movements: [{ id: '', type: 'withdrawal', amount: 20000, note: 'banco', accountId: 'deposito' }] })
+    const [outflow] = await taurus.repo.listMovements()
+    expect(outflow).toMatchObject({ date: '2026-11-03', type: 'withdrawal', amount: 20000, note: 'banco', accountId: 'deposito' })
+    await taurus.repo.deleteMovement(outflow!.id)
+    expect(await taurus.repo.listMovements()).toEqual([])
+    expect((await taurus.snapshot()).movements[0]!.deleted).toBe(true)
+  })
+
+  it('un almacén local con salidas del depósito antiguas las vuelve movimientos de la cuenta deposito, una sola vez', async () => {
+    const saved = JSON.stringify({
+      version: 2,
+      paymentMethods: [{ id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: 'x' }],
+      depositMovements: [{ id: 'old', date: '2026-10-01', amount: 7000, note: 'moto', updatedAt: 'x' }, { id: 'gone', date: '2026-10-02', amount: 1, updatedAt: 'x', deleted: true }],
+    })
+    const store = createMemoryStore({ getItem: () => saved, setItem: () => {} })
+    const taurus = createTaurus(store)
+    await taurus.init()
+    expect((await taurus.repo.listMovements()).map(movement => [movement.id, movement.type, movement.amount, movement.accountId])).toEqual([['old', 'withdrawal', 7000, 'deposito']])
+    await taurus.repo.deleteMovement('old')
+    await createTaurus(store).init()
+    expect(await taurus.repo.listMovements()).toEqual([])
+  })
+
+  it('un almacén local sin cuentas las siembra y asigna cuenta a sus medios de pago', async () => {
+    const store = createMemoryStore()
+    await store.save({ paymentMethods: [
+      { id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: 'x' },
+      { id: 'transfer', name: 'Transferencia', affectsCash: false, sortOrder: 1, active: true, updatedAt: 'x' },
+    ] as never })
+    const taurus = createTaurus(store)
+    await taurus.init()
+    const catalogs = await taurus.repo.listCatalogs()
+    expect(catalogs.accounts.map(account => [account.id, account.isCashBox])).toEqual([['caja', true], ['transferencias', false], ['deposito', false]])
+    expect(catalogs.paymentMethods.map(method => [method.id, method.accountId])).toEqual([['cash', 'caja'], ['transfer', 'transferencias']])
+    expect(catalogs.movementTypes.some(type => type.id === 'traslado' && type.requiresDestination)).toBe(true)
   })
 
   it('turnos: guarda, lista por fecha ordenados, cierra el en curso y borra con lápida', async () => {
@@ -187,14 +214,29 @@ describe('taurus: depósito', () => {
     expect(snapshot.fundMovements.find(movement => movement.id === transfer.id)!.deleted).toBe(true)
   })
 
-  it('movimientos de caja conservan categoryId y medio; sin medio quedan con el medio por defecto del catálogo', async () => {
+  it('movimientos de caja conservan categoryId, cuenta y destino del traslado; el destino solo viaja en tipos que lo piden', async () => {
     const taurus = await setup()
     await taurus.repo.putCash({ date: '2026-11-07', opening: 0, openedAt: '2026-11-07T07:00:00', movements: [
-      { id: '', type: 'expense', amount: 8000, categoryId: 'comida', method: 'transfer' },
-      { id: '', type: 'expense', amount: 3000 },
+      { id: '', type: 'expense', amount: 8000, categoryId: 'comida', accountId: 'transferencias', toAccountId: 'deposito' },
+      { id: '', type: 'traslado', amount: 3000, accountId: 'caja', toAccountId: 'deposito' },
     ] })
     const cash = await taurus.repo.getCash('2026-11-07')
-    expect(cash!.movements.map(movement => [movement.categoryId, movement.method])).toEqual([['comida', 'transfer'], [undefined, 'cash']])
+    expect(cash!.movements.map(movement => [movement.categoryId, movement.accountId, movement.toAccountId])).toEqual([['comida', 'transferencias', undefined], [undefined, 'caja', 'deposito']])
+    const stored = (await taurus.snapshot()).movements
+    expect(stored.every(record => !('method' in record))).toBe(true)
+  })
+
+  it('un movimiento viejo con medio y sin cuenta se ve con la cuenta de su medio de pago', async () => {
+    const store = createMemoryStore()
+    const taurus = createTaurus(store)
+    await taurus.init()
+    await store.save({
+      cash: [{ id: '2026-11-08', date: '2026-11-08', opening: 0, openedAt: 'x', updatedAt: 'x' }],
+      movements: [{ id: 'm1', date: '2026-11-08', type: 'expense', amount: 5, method: 'transfer', updatedAt: 'x' }, { id: 'm2', date: '2026-11-08', type: 'expense', amount: 6, updatedAt: 'x' }],
+    })
+    const second = createTaurus(store)
+    expect((await second.repo.getCash('2026-11-08'))!.movements.map(movement => movement.accountId)).toEqual(['transferencias', 'caja'])
+    expect((await second.repo.listMovements()).map(movement => movement.accountId).sort()).toEqual(['caja', 'transferencias'])
   })
 
   it('getRates devuelve las tasas por defecto y saveRates las guarda', async () => {
@@ -258,11 +300,12 @@ describe('taurus: depósito', () => {
     const taurus = await setup()
     const catalogs = await taurus.repo.listCatalogs()
     expect(catalogs.paymentMethods.map(method => method.id)).toEqual(['cash', 'transfer'])
-    expect(catalogs.movementTypes.map(type => [type.id, type.sign])).toEqual([['expense', -1], ['withdrawal', -1], ['deposit', 1]])
+    expect(catalogs.movementTypes.map(type => [type.id, type.sign])).toEqual([['expense', -1], ['withdrawal', -1], ['deposit', 1], ['traslado', -1]])
+    expect(catalogs.accounts.map(account => account.id)).toEqual(['caja', 'transferencias', 'deposito'])
     expect(catalogs.fundMovementTypes.map(type => type.id)).toEqual(['transfer', 'spend'])
     expect(catalogs.expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero', 'varios'])
     const store = createMemoryStore()
-    await store.save({ paymentMethods: [{ id: 'nequi', name: 'Nequi', affectsCash: false, sortOrder: 0, active: true, updatedAt: 'x' }] })
+    await store.save({ paymentMethods: [{ id: 'nequi', name: 'Nequi', accountId: 'transferencias', affectsCash: false, sortOrder: 0, active: true, updatedAt: 'x' }] })
     const other = createTaurus(store)
     await other.init()
     expect((await other.repo.listCatalogs()).paymentMethods.map(method => method.id)).toEqual(['nequi'])
@@ -273,8 +316,11 @@ describe('taurus: depósito', () => {
     const created = await taurus.repo.saveCatalogEntry('expenseCategories', { name: 'Peaje Norte' })
     expect(created).toEqual({ id: 'peaje-norte', name: 'Peaje Norte', sortOrder: 3, active: true })
     expect((await taurus.repo.listCatalogs()).expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero', 'varios', 'peaje-norte'])
-    const method = await taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Nequi', affectsCash: false })
-    expect(method).toMatchObject({ id: 'nequi', affectsCash: false, active: true })
+    const method = await taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Nequi', accountId: 'transferencias', affectsCash: true })
+    expect(method).toMatchObject({ id: 'nequi', accountId: 'transferencias', affectsCash: false, active: true }) // affectsCash sale de la cuenta
+    await expect(taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Sin cuenta', accountId: 'nope', affectsCash: false })).rejects.toThrow(ApiError)
+    const account = await taurus.repo.saveCatalogEntry('accounts', { name: 'Ahorros', initialBalance: 5000, isCashBox: false })
+    expect(account).toMatchObject({ id: 'ahorros', initialBalance: 5000, isCashBox: false, sortOrder: 3 })
     await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: 'comida' })).rejects.toThrow(ApiError)
     await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: '---' })).rejects.toThrow(ApiError)
   })

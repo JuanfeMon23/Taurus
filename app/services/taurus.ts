@@ -1,5 +1,6 @@
 import { computeDay, type Category } from '../utils/calc'
-import { catalogEntryInUse, defaultMethodId, slugifyCode, sortCatalog, withReferencedCatalogs } from '../utils/catalogs'
+import { DEPOSIT_ACCOUNT_ID } from '../utils/accounts'
+import { catalogEntryInUse, defaultMethodId, movementAccountId, movementTypeRequiresDestination, slugifyCode, sortCatalog, withReferencedCatalogs } from '../utils/catalogs'
 import { DEFAULT_RATES, dayNet, sumCommission, type CommissionRates } from '../utils/commission'
 import { tripTotal } from '../utils/trip'
 import { sortShiftTemplates } from '../utils/shifts'
@@ -9,7 +10,7 @@ import { EPOCH, newId, now } from './ids'
 import { upsert } from './memoryStore'
 import { same } from './merge'
 import type {
-  CashDay, CashMeta, CatalogEntry, CatalogKind, Catalogs, CategoryRec, DayMeta, DayRecord, DepositMovement, DepositMovementRec, FundMovement, FundMovementRec, Meta, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Shift, ShiftRec,
+  AccountRec, CashDay, CashMeta, CashMovement, CatalogEntry, CatalogKind, Catalogs, CategoryRec, DatedMovement, DayMeta, DayRecord, FundMovement, FundMovementRec, Meta, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Shift, ShiftRec,
   ShiftTemplate, ShiftTemplateRec, Snapshot, Store,
 } from './types'
 
@@ -58,12 +59,20 @@ const withoutMeta = <T extends Meta>({ updatedAt: _updatedAt, deleted: _deleted,
 
 const nextSortOrder = (entries: { sortOrder: number }[]) => entries.reduce((highest, entry) => Math.max(highest, entry.sortOrder + 1), 0)
 
-const CATALOG_KINDS: CatalogKind[] = ['paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories', 'rateModes']
-
-const methodField = (method: string | undefined) => (method ? { method } : {})
+const CATALOG_KINDS: CatalogKind[] = ['accounts', 'paymentMethods', 'movementTypes', 'fundMovementTypes', 'expenseCategories', 'rateModes']
 
 /** Medio de pago de un registro: el suyo o, si no trae, el primero activo del catálogo. */
 const methodOrDefault = (snapshot: Snapshot, method: string | undefined): string | undefined => method ?? defaultMethodId(live(snapshot.paymentMethods))
+
+/** Cuenta de origen de un movimiento: la suya o, en datos viejos, la de su medio de pago (o la caja). */
+const accountOf = (snapshot: Snapshot, movement: { accountId?: string; method?: string }): string | undefined =>
+  movementAccountId(movement, { accounts: live(snapshot.accounts), paymentMethods: live(snapshot.paymentMethods) })
+
+const movementView = (snapshot: Snapshot, movement: MovementRec): CashMovement => ({
+  id: movement.id, type: movement.type, amount: movement.amount, note: movement.note,
+  ...(movement.categoryId ? { categoryId: movement.categoryId } : {}), accountId: accountOf(snapshot, movement) ?? '',
+  ...(movement.toAccountId ? { toAccountId: movement.toAccountId } : {}),
+})
 
 /**
  * Sincroniza una lista hija (servicios de un día, movimientos de una caja):
@@ -98,6 +107,22 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     if (!silent) opts.onChange?.()
   }
 
+  /**
+   * Almacén local anterior a las cuentas: siembra las cuentas y el tipo traslado, asigna cuenta a cada medio de pago
+   * (la caja si afecta la caja; si no, transferencias) y vuelve movimientos de la cuenta depósito las salidas viejas del depósito.
+   */
+  async function migrateToAccounts(snapshot: Snapshot) {
+    const timestamp = now()
+    const methods = live(snapshot.paymentMethods).filter(method => !method.accountId)
+      .map(method => ({ ...method, accountId: method.affectsCash ? 'caja' : 'transferencias', updatedAt: timestamp }))
+    const knownIds = new Set(snapshot.movements.map(movement => movement.id))
+    const oldOutflows = (snapshot as unknown as { depositMovements?: { id: string; date: string; amount: number; note?: string; deleted?: boolean }[] }).depositMovements ?? []
+    const movements: MovementRec[] = oldOutflows.filter(outflow => !outflow.deleted && !knownIds.has(outflow.id))
+      .map(outflow => ({ id: outflow.id, date: outflow.date, type: 'withdrawal', amount: outflow.amount, note: outflow.note, accountId: DEPOSIT_ACCOUNT_ID, updatedAt: timestamp }))
+    const transferType = snapshot.movementTypes.some(type => type.id === 'traslado') ? [] : SEED_CATALOGS.movementTypes.filter(type => type.requiresDestination)
+    await put({ accounts: structuredClone(SEED_CATALOGS.accounts), paymentMethods: methods, movementTypes: structuredClone(transferType), movements }, true)
+  }
+
   function dayView(snapshot: Snapshot, date: string): DayRecord | null {
     const meta = snapshot.days.find(day => day.id === date && !day.deleted)
     const services = live(snapshot.services).filter(service => service.date === date)
@@ -119,10 +144,7 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
     return {
       date, opening: cashMeta.opening, openedAt: cashMeta.openedAt, closedAt: cashMeta.closedAt, counted: cashMeta.counted,
       ...(cashMeta.toDeposit !== undefined ? { toDeposit: cashMeta.toDeposit } : {}),
-      movements: live(snapshot.movements).filter(movement => movement.date === date).map(movement => ({
-        id: movement.id, type: movement.type, amount: movement.amount, note: movement.note,
-        ...(movement.categoryId ? { categoryId: movement.categoryId } : {}), ...methodField(methodOrDefault(snapshot, movement.method)),
-      })),
+      movements: live(snapshot.movements).filter(movement => movement.date === date).map(movement => movementView(snapshot, movement)),
     }
   }
 
@@ -176,21 +198,22 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
         cashDay.movements.map(movement => ({ ...movement, id: movement.id || undefined })),
         (item, id, editedAt) => ({
           id, date: cashDay.date, type: item.type, amount: item.amount, note: item.note,
-          ...(item.categoryId ? { categoryId: item.categoryId } : {}), ...methodField(methodOrDefault(snapshot, item.method)), updatedAt: editedAt,
+          ...(item.categoryId ? { categoryId: item.categoryId } : {}), accountId: item.accountId ?? accountOf(snapshot, item),
+          ...(item.toAccountId && movementTypeRequiresDestination(live(snapshot.movementTypes), item.type) ? { toAccountId: item.toAccountId } : {}), updatedAt: editedAt,
         }),
         timestamp,
       )
       await put({ cash: [meta], movements })
     },
-    async listDepositMovements() {
-      return live((await loadState()).depositMovements)
-        .map(movement => ({ id: movement.id, date: movement.date, amount: movement.amount, note: movement.note }) as DepositMovement)
+    async listMovements(): Promise<DatedMovement[]> {
+      const snapshot = await loadState()
+      return live(snapshot.movements)
+        .map(movement => ({ ...movementView(snapshot, movement), date: movement.date }))
         .sort((movementA, movementB) => movementB.date.localeCompare(movementA.date))
     },
-    async saveDepositMovement(movement) {
-      const record: DepositMovementRec = { id: movement.id ?? newId(), date: movement.date, amount: movement.amount, note: movement.note || undefined, updatedAt: now() }
-      await put({ depositMovements: [record] })
-      return { id: record.id, date: record.date, amount: record.amount, note: record.note }
+    async deleteMovement(id) {
+      const previous = (await loadState()).movements.find(movement => movement.id === id && !movement.deleted)
+      if (previous) await put({ movements: [{ ...previous, deleted: true, updatedAt: now() }] })
     },
     async listFundMovements() {
       return live((await loadState()).fundMovements)
@@ -260,7 +283,15 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
         ...revived, ...entry, id, name: entry.name.trim(),
         sortOrder: entry.sortOrder ?? revived?.sortOrder ?? nextSortOrder(live(entries)),
         active: entry.active ?? revived?.active ?? true, updatedAt: now(),
-      } as CatalogEntry & Meta
+      } as CatalogEntry & Meta & Record<string, unknown>
+      if (kind === 'paymentMethods') {
+        const account = live(snapshot.accounts).find(candidate => candidate.id === record.accountId)
+        if (!account) throw new ApiError('Elige la cuenta del medio de pago.')
+        record.affectsCash = account.isCashBox // se deriva de la cuenta, no se edita
+      } else if (kind === 'accounts') {
+        record.initialBalance ??= 0
+        record.isCashBox ??= false
+      } else if (kind === 'movementTypes') record.requiresDestination ??= false
       await put({ [kind]: [record] })
       return withoutMeta(record) as never
     },
@@ -279,10 +310,6 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       await put({ settings: [record] })
       return { commissionRate: record.commissionRate, vatRate: record.vatRate }
     },
-    async deleteDepositMovement(id) {
-      const previous = (await loadState()).depositMovements.find(movement => movement.id === id && !movement.deleted)
-      if (previous) await put({ depositMovements: [{ ...previous, deleted: true, updatedAt: now() }] })
-    },
   }
 
   return {
@@ -294,7 +321,10 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       if (snapshot.categories.length === 0) await put({ categories: structuredClone(SEED) }, true)
       // Solo un almacén local nuevo: con el backend los catálogos ya vienen sembrados desde la BD.
       if (CATALOG_KINDS.every(kind => snapshot[kind].length === 0)) await put(structuredClone(SEED_CATALOGS), true)
-      else if (snapshot.rateModes.length === 0) await put({ rateModes: structuredClone(SEED_CATALOGS.rateModes) }, true)
+      else {
+        if (snapshot.rateModes.length === 0) await put({ rateModes: structuredClone(SEED_CATALOGS.rateModes) }, true)
+        if (snapshot.accounts.length === 0) await migrateToAccounts(snapshot)
+      }
     },
 
     /** Guarda el día congelando las tarifas de las categorías activas ahora. */

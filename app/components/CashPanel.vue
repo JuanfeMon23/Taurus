@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { ArrowLeftRight, Banknote, HandCoins, Lock, LockOpen, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
-import type { CashDay, DayRecord, DepositMovement } from '../services/types'
-import { cashSummary, closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
-import { defaultMethodId, entryName, methodAffectsCash, movementSign, movementTypeHasCategory } from '../utils/catalogs'
+import type { CashDay, CashMovement, DatedMovement, DayRecord } from '../services/types'
+import { accountBalances, DEPOSIT_ACCOUNT_ID, movementDirection } from '../utils/accounts'
+import { cashSummary, closingBase, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
+import { accountIsCashBox, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, movementTypeRequiresDestination } from '../utils/catalogs'
 import { toUserMessage } from '../utils/errors'
 import { money } from '../utils/format'
-import { movementIcon, signTone } from '../utils/icons'
+import { accountIcon, movementIcon, signTone } from '../utils/icons'
 import { validateCatalogEntryInput, validateMovementInput } from '../utils/validation'
 
 // Caja de la fecha recibida; `refreshKey` fuerza recarga cuando cambian los viajes del día.
-// `compact` (Hoy): sin movimientos ni gestión de salidas del depósito; eso vive en la página Caja.
+// `compact` (Hoy): sin movimientos, saldos completos ni gestión del depósito; eso vive en la página Caja.
 const props = defineProps<{ date: string; refreshKey?: number; compact?: boolean }>()
 const day = ref<DayRecord | null>(null)
 const cash = ref<CashDay | null>(null)
@@ -17,17 +18,16 @@ const opening = ref<number | null>(null)
 const counted = ref<number | null>(null)
 const toDeposit = ref<number | null>(null)
 const allCash = ref<CashDay[]>([])
-const outflows = ref<DepositMovement[]>([])
+const days = ref<DayRecord[]>([])
+const movements = ref<DatedMovement[]>([])
 const openingTouched = ref(false)
 const showMovement = ref(false)
 const showOpen = ref(false)
 const showClose = ref(false)
 const showReopen = ref(false)
-const showOutflow = ref(false)
-const outflow = reactive({ amount: null as number | null, note: '' })
 const NEW_CATEGORY = '__new__'
-const { catalogs, activeMethods, activeMovementTypes, activeExpenseCategories, defaultMethod, refreshCatalogs } = useCatalogs()
-const newMovement = reactive({ type: '', amount: null as number | null, note: '', categoryId: '', method: '' })
+const { catalogs, activeAccounts, activeMethods, cashBoxId, activeMovementTypes, activeExpenseCategories, refreshCatalogs } = useCatalogs()
+const newMovement = reactive({ type: '', amount: null as number | null, note: '', categoryId: '', accountId: '', toAccountId: '' })
 const newCategoryName = ref('')
 const movementError = ref<string | null>(null)
 const { show } = useNotify()
@@ -35,8 +35,17 @@ let taurus: Awaited<ReturnType<typeof useTaurus>>
 
 const isExpense = computed(() => movementTypeHasCategory(catalogs.value.movementTypes, newMovement.type))
 const typeIndex = computed(() => Math.max(0, activeMovementTypes.value.findIndex(type => type.id === newMovement.type)))
-const methodIndex = computed(() => Math.max(0, activeMethods.value.findIndex(method => method.id === newMovement.method)))
+const requiresDestination = computed(() => movementTypeRequiresDestination(catalogs.value.movementTypes, newMovement.type))
+// Destino de un traslado: cualquier cuenta activa menos la de origen.
+const destinationChoices = computed(() => activeAccounts.value.filter(account => account.id !== newMovement.accountId))
+const accountName = (accountId: string | undefined) => entryName(catalogs.value.accounts, accountId)
+// «Origen → destino» en un traslado; el nombre de la cuenta si no es la caja; nada si es un movimiento corriente de la caja.
+const accountLabel = (movement: CashMovement) => movement.toAccountId
+  ? `${accountName(movement.accountId)} → ${accountName(movement.toAccountId)}`
+  : accountIsCashBox(catalogs.value.accounts, movement.accountId) ? '' : accountName(movement.accountId)
 const typeLabel = (typeId: string) => entryName(catalogs.value.movementTypes, typeId)
+// Efecto en la lista de la caja: un traslado que llega a la caja suma; los de otras cuentas conservan el signo de su tipo.
+const listDirection = (movement: CashMovement) => movementDirection(movement, cashBoxId.value, catalogs.value.movementTypes) || movementSign(catalogs.value.movementTypes, movement.type)
 const cashMethodNames = computed(() => activeMethods.value.filter(method => method.affectsCash).map(method => method.name).join(' / ') || 'caja')
 
 const summary = computed(() => cashSummary(day.value, cash.value, catalogs.value))
@@ -60,14 +69,18 @@ const summaryLines = computed<SummaryLine[]>(() => {
     { key: 'income', label: `+ Servicios (${cashMethodNames.value})`, tone: 'pos', amount: summary.value.cashIncome },
     ...movementLines.value.map((line): SummaryLine => ({ key: line.id, label: `${line.sign > 0 ? '+' : line.sign < 0 ? '−' : '·'} ${line.name}`, tone: line.sign > 0 ? 'pos' : line.sign < 0 ? 'neg' : '', amount: line.amount })),
   ]
+  if (summary.value.transfersIn) lines.push({ key: 'transfersIn', label: '+ Traslados recibidos', tone: 'pos', amount: summary.value.transfersIn })
   if (cash.value && cash.value.closedAt) {
     lines.push({ key: 'toDeposit', label: '→ Al depósito', tone: '', amount: cash.value.toDeposit ?? 0 }, { key: 'kept', label: 'Queda en caja', tone: '', amount: closedKept.value })
   }
-  lines.push({ key: 'balance', label: 'Saldo del depósito', tone: '', amount: balance.value, separated: true })
   return lines
 })
 const isOpen = computed(() => !!cash.value && !cash.value.closedAt)
-const balance = computed(() => depositBalance(allCash.value, outflows.value))
+// Saldos de todas las cuentas; la caja sigue el ciclo diario (efectivo esperado / queda en caja).
+const balances = computed(() => accountBalances({ ...catalogs.value, movements: movements.value, cashes: allCash.value, days: days.value }))
+const otherBalances = computed(() => balances.value.filter(entry => !entry.account.isCashBox))
+const depositBalanceNow = computed(() => balances.value.find(entry => entry.account.id === DEPOSIT_ACCOUNT_ID)?.balance ?? 0)
+const depositOutflows = computed(() => movements.value.filter(movement => movement.accountId === DEPOSIT_ACCOUNT_ID))
 // Cierre en curso: la base es lo contado o, sin conteo, el esperado.
 const closeError = computed(() => validateClosing({ expected: summary.value.expected, counted: counted.value, toDeposit: toDeposit.value }))
 const kept = computed(() => keptInCash(closingBase(summary.value.expected, counted.value ?? undefined), toDeposit.value ?? undefined))
@@ -79,9 +92,10 @@ async function load() {
   counted.value = cash.value?.counted ?? null
   toDeposit.value = cash.value?.toDeposit ?? null
   allCash.value = await taurus.repo.listCash()
-  outflows.value = await taurus.repo.listDepositMovements()
+  days.value = await taurus.repo.listDays()
+  movements.value = await taurus.repo.listMovements()
   if (!cash.value && !openingTouched.value) {
-    opening.value = suggestedOpening(allCash.value, await taurus.repo.listDays(), props.date, catalogs.value) ?? null
+    opening.value = suggestedOpening(allCash.value, days.value, props.date, catalogs.value) ?? null
   }
 }
 onMounted(async () => {
@@ -119,7 +133,7 @@ async function close() {
 }
 
 function resetMovement() {
-  Object.assign(newMovement, { type: activeMovementTypes.value[0]?.id ?? '', amount: null, note: '', categoryId: '', method: defaultMethod.value })
+  Object.assign(newMovement, { type: activeMovementTypes.value[0]?.id ?? '', amount: null, note: '', categoryId: '', accountId: cashBoxId.value, toAccountId: '' })
   newCategoryName.value = ''
 }
 
@@ -138,7 +152,7 @@ async function createCategory() {
 
 async function addMovement() {
   if (!cash.value) return
-  movementError.value = validateMovementInput(newMovement)
+  movementError.value = validateMovementInput({ ...newMovement, requiresDestination: requiresDestination.value })
   if (movementError.value || !newMovement.amount) return
   if (newMovement.categoryId === NEW_CATEGORY) {
     movementError.value = 'Crea la categoría nueva o elige otra.'
@@ -149,7 +163,7 @@ async function addMovement() {
     // id vacío: el dominio asigna un id único al guardarlo.
     await save({ ...cash.value, movements: [...cash.value.movements, {
       id: '', type: newMovement.type, amount: newMovement.amount, note: newMovement.note.trim() || undefined,
-      ...(categoryId ? { categoryId } : {}), method: isExpense.value ? newMovement.method : defaultMethodId(catalogs.value.paymentMethods),
+      ...(categoryId ? { categoryId } : {}), accountId: newMovement.accountId, ...(requiresDestination.value ? { toAccountId: newMovement.toAccountId } : {}),
     }] }, `${typeLabel(newMovement.type)} registrado`)
   } catch (error) {
     movementError.value = toUserMessage(error)
@@ -159,16 +173,20 @@ async function addMovement() {
   showMovement.value = false
 }
 watch(showMovement, () => { movementError.value = null })
-async function addOutflow() {
-  if (!outflow.amount || outflow.amount <= 0) return
-  await taurus.repo.saveDepositMovement({ date: props.date, amount: outflow.amount, note: outflow.note.trim() || undefined })
-  Object.assign(outflow, { amount: null, note: '' })
-  showOutflow.value = false
-  await load()
-  show('Salida del depósito registrada')
+// El destino de un traslado nunca es el origen: se propone la primera cuenta distinta.
+watch(() => [newMovement.type, newMovement.accountId], () => {
+  if (!requiresDestination.value) newMovement.toAccountId = ''
+  else if (!destinationChoices.value.some(account => account.id === newMovement.toAccountId)) newMovement.toAccountId = destinationChoices.value[0]?.id ?? ''
+})
+// «Registrar salida» del depósito: el mismo modal de movimiento, con la cuenta depósito y un tipo que resta.
+function openDepositOutflow() {
+  resetMovement()
+  const outflowType = activeMovementTypes.value.find(type => type.sign < 0 && !type.hasCategory && !type.requiresDestination)
+  Object.assign(newMovement, { type: outflowType?.id ?? newMovement.type, accountId: DEPOSIT_ACCOUNT_ID })
+  showMovement.value = true
 }
-async function removeOutflow(id: string) {
-  await taurus.repo.deleteDepositMovement(id)
+async function removeDepositOutflow(id: string) {
+  await taurus.repo.deleteMovement(id)
   await load()
 }
 const removeMovement = (id: string) =>
@@ -177,6 +195,20 @@ const removeMovement = (id: string) =>
 
 <template>
   <section class="stack">
+    <!-- Saldos de las cuentas (solo en la página Caja) -->
+    <div v-if="!compact" class="card stack">
+      <span class="title">Saldos</span>
+      <div class="balances">
+        <div v-for="entry in balances" :key="entry.account.id" class="balance">
+          <span class="icon-tile"><component :is="accountIcon(entry.account.id, entry.account.isCashBox)" :size="20" /></span>
+          <div>
+            <p class="small muted">{{ entry.account.name }}</p>
+            <b class="num balance-amount" :class="{ neg: entry.balance < 0 }">{{ money(entry.balance) }}</b>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Hoy (compacto): una sola tarjeta con estado, efectivo esperado y acción principal -->
     <div v-if="compact" class="card stack compact-card">
       <div class="row between">
@@ -206,6 +238,9 @@ const removeMovement = (id: string) =>
             <span :class="summary.difference < 0 ? 'neg' : 'pos'">{{ summary.difference < 0 ? 'Faltante' : summary.difference > 0 ? 'Sobrante' : 'Cuadra' }}</span>
             <b class="num" :class="summary.difference < 0 ? 'neg' : 'pos'">{{ money(Math.abs(summary.difference)) }}</b>
           </div>
+        </div>
+        <div v-if="otherBalances.length" class="cash-lines balances-row" aria-label="Saldos de las otras cuentas">
+          <div v-for="entry in otherBalances" :key="entry.account.id"><span>{{ entry.account.name }}</span><b class="num">{{ money(entry.balance) }}</b></div>
         </div>
         <div v-for="income in offCashIncome" :key="income.id" class="note">
           <ArrowLeftRight :size="16" /> {{ money(income.amount) }} por {{ income.name.toLowerCase() }} (no entran a caja)
@@ -251,13 +286,13 @@ const removeMovement = (id: string) =>
         <p v-if="!cash.movements.length" class="muted small">Sin movimientos.</p>
         <TransitionGroup name="list" tag="div" class="stack rel" style="gap: 8px">
           <div v-for="movement in cash.movements" :key="movement.id" class="row mv">
-            <span class="icon-tile" :class="signTone(movementSign(catalogs.movementTypes, movement.type))"><component :is="movementIcon(movement.type, movementSign(catalogs.movementTypes, movement.type))" :size="20" /></span>
+            <span class="icon-tile" :class="signTone(listDirection(movement))"><component :is="movementIcon(movement.type, listDirection(movement))" :size="20" /></span>
             <div class="grow">
               <b>{{ typeLabel(movement.type) }}<span v-if="movement.categoryId"> · {{ entryName(catalogs.expenseCategories, movement.categoryId) }}</span></b>
-              <span v-if="movement.method && !methodAffectsCash(catalogs.paymentMethods, movement.method)" class="chip info tag">{{ entryName(catalogs.paymentMethods, movement.method) }}</span>
+              <span v-if="accountLabel(movement)" class="chip info tag">{{ accountLabel(movement) }}</span>
               <p v-if="movement.note" class="muted small">{{ movement.note }}</p>
             </div>
-            <b class="num" :class="signTone(movementSign(catalogs.movementTypes, movement.type))">{{ movementSign(catalogs.movementTypes, movement.type) > 0 ? '+' : '−' }} {{ money(movement.amount) }}</b>
+            <b class="num" :class="signTone(listDirection(movement))">{{ listDirection(movement) > 0 ? '+' : '−' }} {{ money(movement.amount) }}</b>
             <button class="btn icon ghost" aria-label="Eliminar" @click="removeMovement(movement.id)"><Trash2 :size="17" /></button>
           </div>
         </TransitionGroup>
@@ -279,20 +314,20 @@ const removeMovement = (id: string) =>
     <div v-if="!compact" class="card stack">
       <div class="row between">
         <span class="title">Depósito</span>
-        <button v-if="cash" class="btn small-btn" @click="showOutflow = true"><Plus :size="16" /> Registrar salida</button>
+        <button v-if="cash" class="btn small-btn" @click="openDepositOutflow"><Plus :size="16" /> Registrar salida</button>
       </div>
-      <p class="small-total"><Vault :size="22" /> {{ money(balance) }}</p>
-      <p class="small muted">Saldo = lo llevado al depósito en los cierres − las salidas.</p>
-      <p v-if="!outflows.length" class="muted small">Sin salidas del depósito.</p>
+      <p class="small-total"><Vault :size="22" /> {{ money(depositBalanceNow) }}</p>
+      <p class="small muted">Saldo = lo llevado al depósito en los cierres + traslados que llegan − salidas.</p>
+      <p v-if="!depositOutflows.length" class="muted small">Sin salidas del depósito.</p>
       <div v-else class="stack" style="gap: 8px">
-        <div v-for="depositMovement in outflows" :key="depositMovement.id" class="row mv">
+        <div v-for="outflow in depositOutflows" :key="outflow.id" class="row mv">
           <span class="icon-tile neg"><HandCoins :size="20" /></span>
           <div class="grow">
-            <b>{{ depositMovement.date }}</b>
-            <p v-if="depositMovement.note" class="muted small">{{ depositMovement.note }}</p>
+            <b>{{ outflow.date }} · {{ typeLabel(outflow.type) }}</b>
+            <p v-if="outflow.note" class="muted small">{{ outflow.note }}</p>
           </div>
-          <b class="num neg">− {{ money(depositMovement.amount) }}</b>
-          <button class="btn icon ghost" aria-label="Eliminar salida" @click="removeOutflow(depositMovement.id)"><Trash2 :size="17" /></button>
+          <b class="num neg">− {{ money(outflow.amount) }}</b>
+          <button class="btn icon ghost" aria-label="Eliminar salida" @click="removeDepositOutflow(outflow.id)"><Trash2 :size="17" /></button>
         </div>
       </div>
     </div>
@@ -367,12 +402,19 @@ const removeMovement = (id: string) =>
             <input v-model="newCategoryName" type="text" maxlength="60" placeholder="Nombre de la categoría" aria-label="Nombre de la categoría nueva" class="input grow" @keydown.enter.prevent="createCategory">
             <button type="button" class="btn" @click="createCategory"><Plus :size="16" /> Crear</button>
           </div>
-          <div class="seg" :style="{ '--n': Math.max(activeMethods.length, 1), '--i': methodIndex }" role="group" aria-label="Medio de pago">
-            <span class="thumb" />
-            <button v-for="method in activeMethods" :key="method.id" type="button" :class="{ active: newMovement.method === method.id }" @click="newMovement.method = method.id">{{ method.name }}</button>
-          </div>
-          <p v-if="!methodAffectsCash(catalogs.paymentMethods, newMovement.method)" class="small muted">Con {{ entryName(catalogs.paymentMethods, newMovement.method).toLowerCase() }} no sale dinero de la caja.</p>
         </template>
+        <label class="field">
+          <span>Cuenta</span>
+          <select v-model="newMovement.accountId" class="input">
+            <option v-for="account in activeAccounts" :key="account.id" :value="account.id">{{ account.name }}</option>
+          </select>
+        </label>
+        <label v-if="requiresDestination" class="field">
+          <span>Hacia</span>
+          <select v-model="newMovement.toAccountId" class="input">
+            <option v-for="account in destinationChoices" :key="account.id" :value="account.id">{{ account.name }}</option>
+          </select>
+        </label>
         <input v-model.number="newMovement.amount" type="number" inputmode="decimal" min="0" placeholder="Monto" aria-label="Monto" class="input">
         <input v-model="newMovement.note" type="text" placeholder="Nota (opcional)" aria-label="Nota" class="input">
         <p v-if="movementError" class="err" role="alert">{{ movementError }}</p>
@@ -380,14 +422,6 @@ const removeMovement = (id: string) =>
       </form>
     </BaseModal>
 
-    <BaseModal v-if="!compact" :open="showOutflow" title="Salida del depósito" @close="showOutflow = false">
-      <form class="stack" @submit.prevent="addOutflow">
-        <p class="small muted">Fecha: {{ date }}</p>
-        <input v-model.number="outflow.amount" type="number" inputmode="decimal" min="0" placeholder="Monto" aria-label="Monto" class="input">
-        <input v-model="outflow.note" type="text" placeholder="Nota (p. ej. pago de moto)" aria-label="Nota" class="input">
-        <button type="submit" class="btn primary full"><Plus :size="18" /> Registrar</button>
-      </form>
-    </BaseModal>
   </section>
 </template>
 
@@ -400,6 +434,11 @@ const removeMovement = (id: string) =>
 .cash-lines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px; font-size: 13px; }
 .cash-lines > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text-2); }
 .cash-lines > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.balances-row { padding-top: 6px; border-top: 1px solid var(--border); }
+.balances { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.balance { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: var(--surface-2); }
+.balance p { margin: 0; }
+.balance-amount { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 .cash-lines > .sep { grid-column: 1 / -1; padding-top: 4px; border-top: 1px solid var(--border); }
 .rel { position: relative; }
 .big { width: 64px; height: 64px; border-radius: 20px; }

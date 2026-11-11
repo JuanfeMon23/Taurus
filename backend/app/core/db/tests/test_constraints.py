@@ -447,7 +447,7 @@ async def test_type_catalog_rejects_invalid_sign(
 @pytest.mark.parametrize(
     ("model", "extra"),
     [
-        (PaymentMethod, {"affects_cash": True}),
+        (PaymentMethod, {"affects_cash": True, "account_id": "caja"}),
         (MovementType, {"sign": 1}),
         (FundMovementType, {"sign": 1}),
         (ExpenseCategory, {}),
@@ -557,8 +557,8 @@ async def test_child_before_catalog_in_same_transaction_commits(test_url: str) -
             )
             await conn.execute(
                 text(
-                    "insert into payment_methods (id, name, affects_cash, deleted) "
-                    "values ('card', 'Tarjeta', false, false)"
+                    "insert into payment_methods (id, name, affects_cash, account_id, deleted) "
+                    "values ('card', 'Tarjeta', false, 'transferencias', false)"
                 )
             )
         async with engine.connect() as conn:
@@ -578,8 +578,8 @@ async def test_tombstoned_catalog_row_keeps_references_valid(test_url: str) -> N
         async with engine.begin() as conn:
             await conn.execute(
                 text(
-                    "insert into payment_methods (id, name, affects_cash, deleted) "
-                    "values ('old', 'Vieja', false, false)"
+                    "insert into payment_methods (id, name, affects_cash, account_id, deleted) "
+                    "values ('old', 'Vieja', false, 'transferencias', false)"
                 )
             )
             await conn.execute(text(INSERT_SHIFT_SQL.format(k="fk-tomb-sh")))

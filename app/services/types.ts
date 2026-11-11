@@ -65,7 +65,11 @@ export interface MovementRec extends Meta {
   note?: string
   /** Categoría del gasto varios: id de `expenseCategories`. */
   categoryId?: string
-  /** Medio de pago; ausente = el medio por defecto del catálogo. Los que no afectan la caja no la tocan. */
+  /** Cuenta de origen (`accounts[].id`); ausente solo en datos viejos: entonces vale la cuenta de su medio de pago (`method`) o la caja. */
+  accountId?: string
+  /** Cuenta de destino; solo los tipos que `requiresDestination` (traslados) la llevan. */
+  toAccountId?: string
+  /** Solo lectura, datos anteriores a las cuentas: medio de pago del movimiento. Ya no se escribe. */
   method?: PayMethod
 }
 
@@ -74,13 +78,6 @@ export interface FundMovementRec extends Meta {
   date: string
   categoryId: string
   type: FundMovementType
-  amount: number
-  note?: string
-}
-
-/** Salida del depósito (fuera de la caja diaria). */
-export interface DepositMovementRec extends Meta {
-  date: string
   amount: number
   note?: string
 }
@@ -119,8 +116,15 @@ export interface CatalogEntry {
   active: boolean
 }
 
-/** Medio de pago; `affectsCash` = el dinero entra o sale de la caja física. */
+/** Cuenta con saldo propio (caja, transferencias, depósito…); `isCashBox` = es la caja física del ciclo diario. */
+export interface Account extends CatalogEntry {
+  initialBalance: number
+  isCashBox: boolean
+}
+
+/** Medio de pago: lleva su dinero a una cuenta; `affectsCash` = esa cuenta es la caja (se deriva de la cuenta, no se edita). */
 export interface PaymentMethod extends CatalogEntry {
+  accountId: string
   affectsCash: boolean
 }
 
@@ -132,6 +136,8 @@ export interface SignedEntry extends CatalogEntry {
 /** Tipo de movimiento de caja; `hasCategory` = el movimiento pide categoría de gasto y alimenta «Gastos varios». */
 export interface MovementTypeEntry extends SignedEntry {
   hasCategory: boolean
+  /** El movimiento pide cuenta de destino (traslado entre cuentas). */
+  requiresDestination: boolean
 }
 
 export type ExpenseCategory = CatalogEntry
@@ -143,6 +149,7 @@ export interface RateMode extends CatalogEntry {
 }
 
 export interface Catalogs {
+  accounts: Account[]
   paymentMethods: PaymentMethod[]
   movementTypes: MovementTypeEntry[]
   fundMovementTypes: SignedEntry[]
@@ -152,8 +159,9 @@ export interface Catalogs {
 
 export type CatalogKind = keyof Catalogs
 
-export const emptyCatalogs = (): Catalogs => ({ paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [] })
+export const emptyCatalogs = (): Catalogs => ({ accounts: [], paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [] })
 
+export type AccountRec = Account & Meta
 export type PaymentMethodRec = PaymentMethod & Meta
 export type MovementTypeRec = MovementTypeEntry & Meta
 export type FundMovementTypeRec = SignedEntry & Meta
@@ -175,10 +183,10 @@ export interface Snapshot {
   services: ServiceRec[]
   cash: CashMeta[]
   movements: MovementRec[]
-  depositMovements: DepositMovementRec[]
   fundMovements: FundMovementRec[]
   shifts: ShiftRec[]
   shiftTemplates: ShiftTemplateRec[]
+  accounts: AccountRec[]
   paymentMethods: PaymentMethodRec[]
   movementTypes: MovementTypeRec[]
   fundMovementTypes: FundMovementTypeRec[]
@@ -189,8 +197,8 @@ export interface Snapshot {
 
 export type Collection = keyof Snapshot
 
-export const emptySnapshot = (): Snapshot => ({ categories: [], days: [], services: [], cash: [], movements: [], depositMovements: [], fundMovements: [], shifts: [],
-  shiftTemplates: [], paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [], settings: [] })
+export const emptySnapshot = (): Snapshot => ({ categories: [], days: [], services: [], cash: [], movements: [], fundMovements: [], shifts: [],
+  shiftTemplates: [], accounts: [], paymentMethods: [], movementTypes: [], fundMovementTypes: [], expenseCategories: [], rateModes: [], settings: [] })
 
 /** Persistencia: carga todo y guarda registros por id (upsert). */
 export interface Store {
@@ -229,7 +237,9 @@ export interface CashMovement {
   amount: number
   note?: string
   categoryId?: string
-  method?: PayMethod
+  /** Cuenta de origen; la vista siempre la trae resuelta (datos viejos: la de su medio de pago, o la caja). */
+  accountId: string
+  toAccountId?: string
 }
 
 /** Caja de un día: apertura, movimientos en efectivo y cierre. */
@@ -244,12 +254,9 @@ export interface CashDay {
   movements: CashMovement[]
 }
 
-/** Salida del depósito (vista de dominio). */
-export interface DepositMovement {
-  id: string
+/** Movimiento de cuenta con su fecha (vista plana de todos los movimientos vivos, con o sin caja del día). */
+export interface DatedMovement extends CashMovement {
   date: string
-  amount: number
-  note?: string
 }
 
 /** Movimiento de un fondo (vista de dominio). */
@@ -308,10 +315,10 @@ export interface Repo {
   listCash(): Promise<CashDay[]>
   /** Crea/reemplaza la caja del día (apertura, movimientos y cierre). */
   putCash(cash: CashDay): Promise<void>
-  listDepositMovements(): Promise<DepositMovement[]>
-  /** Crea (sin id) o edita una salida del depósito. */
-  saveDepositMovement(movement: Omit<DepositMovement, 'id'> & { id?: string }): Promise<DepositMovement>
-  deleteDepositMovement(id: string): Promise<void>
+  /** Todos los movimientos vivos (nuevo primero), con su cuenta ya resuelta. */
+  listMovements(): Promise<DatedMovement[]>
+  /** Deja lápida a un movimiento, tenga o no caja su fecha. */
+  deleteMovement(id: string): Promise<void>
   listFundMovements(): Promise<FundMovement[]>
   /** Crea (sin id) o edita un movimiento de fondo. */
   saveFundMovement(movement: Omit<FundMovement, 'id'> & { id?: string }): Promise<FundMovement>
@@ -325,7 +332,7 @@ export interface Repo {
   saveShiftTemplate(template: NewShiftTemplate): Promise<ShiftTemplate>
   /** Deja lápida a la plantilla (los turnos ya creados con ella se conservan). */
   deleteShiftTemplate(id: string): Promise<void>
-  /** Los cinco catálogos completos (también inactivos), ordenados por `sortOrder` y nombre. */
+  /** Los seis catálogos completos (también inactivos), ordenados por `sortOrder` y nombre. */
   listCatalogs(): Promise<Catalogs>
   /** Crea (sin id) o edita una entrada de catálogo. */
   saveCatalogEntry<Kind extends CatalogKind>(kind: Kind, entry: NewCatalogEntry<Catalogs[Kind][number]>): Promise<Catalogs[Kind][number]>

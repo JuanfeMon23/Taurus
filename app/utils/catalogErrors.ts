@@ -3,7 +3,9 @@
 const FIELD_LABELS: Record<string, string> = {
   'categories.rateMode': 'el modo de tarifa',
   'services.method': 'el medio de pago',
-  'movements.method': 'el medio de pago',
+  'movements.accountId': 'la cuenta del movimiento',
+  'movements.toAccountId': 'la cuenta de destino',
+  'paymentMethods.accountId': 'la cuenta del medio de pago',
   'movements.type': 'el tipo de movimiento',
   'movements.categoryId': 'la categoría de gasto',
   'fundMovements.type': 'el tipo de movimiento de fondo',
@@ -23,6 +25,18 @@ export const missingShiftMessage = (details: unknown): string =>
   Array.isArray(details) && details.some(detail => typeof detail?.campo === 'string' && detail.campo === 'services.shiftId')
     ? 'Hay viajes de este día sin turno; asígnales uno'
     : ''
+
+const ACCOUNT_RULE_PHRASES: Record<string, string> = {
+  'paymentMethods.affectsCash': 'Un medio de pago afecta la caja solo si su cuenta es la caja; cambia la cuenta del medio en Tarifas > Catálogos.',
+  'movements.toAccountId': 'Un traslado necesita una cuenta de destino distinta de la de origen; los demás movimientos no llevan destino.',
+}
+
+/** Frases del 422 `account_rule_violation` (una por regla incumplida, sin repetir); sin detalles reconocibles, una frase general. */
+export function accountRuleViolationMessage(details: unknown): string {
+  const phrases = (Array.isArray(details) ? (details as UnknownCodeDetail[]) : []).map(detail => (typeof detail?.campo === 'string' ? ACCOUNT_RULE_PHRASES[detail.campo] : undefined)).filter(Boolean)
+  const unique = [...new Set(phrases)]
+  return unique.length ? unique.join(' ') : 'Los datos no cumplen las reglas de las cuentas; revisa las cuentas y el destino de los traslados.'
+}
 
 /** Una frase por detalle, sin repetir; sin detalles útiles devuelve una frase general. */
 export function unknownCatalogCodeMessage(details: unknown): string {

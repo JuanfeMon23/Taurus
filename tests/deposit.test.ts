@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { closingBase, depositBalance, keptInCash, suggestedOpening, validateClosing } from '../app/utils/cash'
-import type { CashDay, DayRecord, DepositMovement } from '../app/services/types'
+import { closingBase, keptInCash, suggestedOpening, validateClosing } from '../app/utils/cash'
+import { accountBalance } from '../app/utils/accounts'
+import type { CashDay, DatedMovement, DayRecord } from '../app/services/types'
 import { testCatalogs } from './fixtures/catalogs'
 
 const catalogs = testCatalogs()
@@ -11,7 +12,8 @@ const cash = (date: string, overrides: Partial<CashDay> = {}): CashDay => ({
 const day = (date: string, amounts: number[]): DayRecord => ({
   date, km: 0, services: amounts.map(amount => ({ amount })), costs: [], gross: 0, totalCost: 0, net: 0,
 })
-const buildOutflow = (id: string, amount: number): DepositMovement => ({ id, date: '2026-11-03', amount })
+const buildOutflow = (id: string, amount: number): DatedMovement => ({ id, date: '2026-11-03', type: 'withdrawal', amount, accountId: 'deposito' })
+const depositBalance = (cashes: CashDay[], outflows: DatedMovement[]) => accountBalance('deposito', { ...catalogs, cashes, days: [], movements: outflows })
 
 describe('depósito: queda en caja', () => {
   it('base = contado si hay conteo; si no, el esperado', () => {
@@ -42,7 +44,7 @@ describe('depósito: validación del cierre', () => {
   })
 })
 
-describe('depósito: saldo', () => {
+describe('depósito: saldo (cuenta deposito)', () => {
   it('suma lo depositado en las cajas y resta las salidas', () => {
     const cashes = [cash('2026-11-01', { toDeposit: 50000 }), cash('2026-11-02'), cash('2026-11-03', { toDeposit: 20000 })]
     expect(depositBalance(cashes, [buildOutflow('a', 15000), buildOutflow('b', 5000)])).toBe(50000)

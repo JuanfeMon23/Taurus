@@ -5,6 +5,7 @@ from sqlalchemy import CheckConstraint, Date, DateTime, Index, Numeric, Text, te
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db.base import Base, SyncMixin, catalog_fk
+from app.modules.accounts.models import Account  # noqa: F401  (FK de movements.account_id)
 
 
 class CashDay(SyncMixin, Base):
@@ -32,6 +33,11 @@ class Movement(SyncMixin, Base):
         Index("ix_movements_date", "date"),
         Index("ix_movements_type", "type"),
         Index("ix_movements_method", "method"),
+        Index("ix_movements_account_id", "account_id"),
+        Index("ix_movements_to_account_id", "to_account_id"),
+        CheckConstraint(
+            "to_account_id IS NULL OR to_account_id <> account_id", name="distinct_accounts"
+        ),
         Index("ix_movements_category_id", "category_id"),
     )
 
@@ -40,7 +46,14 @@ class Movement(SyncMixin, Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     note: Mapped[str | None] = mapped_column(Text)
     category_id: Mapped[str | None] = mapped_column(Text, catalog_fk("expense_categories"))
-    method: Mapped[str] = mapped_column(
+    # Cuenta de origen (la afectada por `type.sign`) y, en un traslado, la de destino; el trigger
+    # diferido exige to_account_id solo si el tipo tiene requires_destination.
+    account_id: Mapped[str] = mapped_column(
+        Text, catalog_fk("accounts"), server_default=text("'caja'")
+    )
+    to_account_id: Mapped[str | None] = mapped_column(Text, catalog_fk("accounts"))
+    # Obsoleto: lo reemplaza account_id; se conserva sin uso nuevo.
+    method: Mapped[str | None] = mapped_column(
         Text, catalog_fk("payment_methods"), server_default=text("'cash'")
     )
 

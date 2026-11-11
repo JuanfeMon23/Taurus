@@ -5,15 +5,21 @@ import type { Snapshot } from './types'
  * Catálogos iniciales para un almacén local que arranca sin ninguno (APK con SQLite, pruebas). Con el backend nunca se usan:
  * la base ya trae las mismas semillas y `init()` solo siembra si no existe ninguna entrada.
  */
-export const SEED_CATALOGS: Pick<Snapshot, 'paymentMethods' | 'movementTypes' | 'fundMovementTypes' | 'expenseCategories' | 'rateModes'> = {
+export const SEED_CATALOGS: Pick<Snapshot, 'accounts' | 'paymentMethods' | 'movementTypes' | 'fundMovementTypes' | 'expenseCategories' | 'rateModes'> = {
+  accounts: [
+    { id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true, updatedAt: EPOCH },
+    { id: 'transferencias', name: 'Transferencias', initialBalance: 0, isCashBox: false, sortOrder: 1, active: true, updatedAt: EPOCH },
+    { id: 'deposito', name: 'Depósito', initialBalance: 0, isCashBox: false, sortOrder: 2, active: true, updatedAt: EPOCH },
+  ],
   paymentMethods: [
-    { id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true, updatedAt: EPOCH },
-    { id: 'transfer', name: 'Transferencia', affectsCash: false, sortOrder: 1, active: true, updatedAt: EPOCH },
+    { id: 'cash', name: 'Efectivo', accountId: 'caja', affectsCash: true, sortOrder: 0, active: true, updatedAt: EPOCH },
+    { id: 'transfer', name: 'Transferencia', accountId: 'transferencias', affectsCash: false, sortOrder: 1, active: true, updatedAt: EPOCH },
   ],
   movementTypes: [
-    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, sortOrder: 0, active: true, updatedAt: EPOCH },
-    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, sortOrder: 1, active: true, updatedAt: EPOCH },
-    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, sortOrder: 2, active: true, updatedAt: EPOCH },
+    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, requiresDestination: false, sortOrder: 0, active: true, updatedAt: EPOCH },
+    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, requiresDestination: false, sortOrder: 1, active: true, updatedAt: EPOCH },
+    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, requiresDestination: false, sortOrder: 2, active: true, updatedAt: EPOCH },
+    { id: 'traslado', name: 'Traslado', sign: -1, hasCategory: false, requiresDestination: true, sortOrder: 3, active: true, updatedAt: EPOCH },
   ],
   fundMovementTypes: [
     { id: 'transfer', name: 'Envío', sign: 1, sortOrder: 0, active: true, updatedAt: EPOCH },

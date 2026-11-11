@@ -5,15 +5,27 @@ import { ApiError } from '../app/services/apiStore'
 
 describe('validateMovementInput', () => {
   it('rechaza monto vacío, cero o negativo con mensaje en español', () => {
-    expect(validateMovementInput({ type: 'expense', amount: null })).toBe('Escribe un monto mayor que cero.')
-    expect(validateMovementInput({ type: 'expense', amount: 0 })).toBe('Escribe un monto mayor que cero.')
-    expect(validateMovementInput({ type: 'withdrawal', amount: -5 })).toBe('Escribe un monto mayor que cero.')
+    expect(validateMovementInput({ type: 'expense', amount: null, accountId: 'caja' })).toBe('Escribe un monto mayor que cero.')
+    expect(validateMovementInput({ type: 'expense', amount: 0, accountId: 'caja' })).toBe('Escribe un monto mayor que cero.')
+    expect(validateMovementInput({ type: 'withdrawal', amount: -5, accountId: 'caja' })).toBe('Escribe un monto mayor que cero.')
   })
   it('exige el tipo de movimiento', () => {
-    expect(validateMovementInput({ type: '', amount: 10 })).toBe('Elige el tipo de movimiento.')
+    expect(validateMovementInput({ type: '', amount: 10, accountId: 'caja' })).toBe('Elige el tipo de movimiento.')
   })
   it('acepta un gasto válido', () => {
-    expect(validateMovementInput({ type: 'expense', amount: 8000 })).toBeNull()
+    expect(validateMovementInput({ type: 'expense', amount: 8000, accountId: 'caja' })).toBeNull()
+  })
+  it('exige la cuenta', () => {
+    expect(validateMovementInput({ type: 'expense', amount: 8000, accountId: '' })).toBe('Elige la cuenta.')
+  })
+  it('un traslado exige un destino distinto del origen', () => {
+    const base = { type: 'traslado', amount: 100, accountId: 'caja', requiresDestination: true }
+    expect(validateMovementInput({ ...base, toAccountId: '' })).toBe('Elige la cuenta de destino.')
+    expect(validateMovementInput({ ...base, toAccountId: 'caja' })).toBe('El destino debe ser distinto de la cuenta de origen.')
+    expect(validateMovementInput({ ...base, toAccountId: 'deposito' })).toBeNull()
+  })
+  it('un tipo sin destino no valida el destino', () => {
+    expect(validateMovementInput({ type: 'expense', amount: 8000, accountId: 'caja', toAccountId: 'caja' })).toBeNull()
   })
 })
 

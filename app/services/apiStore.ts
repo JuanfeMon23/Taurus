@@ -1,4 +1,4 @@
-import { missingShiftMessage, unknownCatalogCodeMessage } from '../utils/catalogErrors'
+import { accountRuleViolationMessage, missingShiftMessage, unknownCatalogCodeMessage } from '../utils/catalogErrors'
 import { emptySnapshot, type Snapshot, type Store } from './types'
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>
@@ -16,6 +16,7 @@ async function readableError(response: Response): Promise<string> {
   } catch { /* cuerpo no JSON */ }
   if (response.status === 422) {
     if (body?.code === 'unknown_catalog_code') return unknownCatalogCodeMessage(body.details)
+    if (body?.code === 'account_rule_violation') return accountRuleViolationMessage(body.details)
     const missingShift = missingShiftMessage(body?.details)
     if (missingShift) return missingShift
     const messages = Array.isArray(body?.details) ? body.details.map((detail: any) => detail?.mensaje).filter(Boolean) : []
@@ -46,7 +47,9 @@ export function createApiStore(base: string, fetchFn: Fetch = (input, init) => f
   return {
     async load() {
       const data = await call()
-      return { ...emptySnapshot(), ...data } as Snapshot
+      // `depositMovements` ya no existe: las salidas del depósito son movimientos de la cuenta depósito.
+      const { depositMovements: _depositMovements, ...rest } = data ?? {}
+      return { ...emptySnapshot(), ...rest } as Snapshot
     },
     async save(changes) {
       await call({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes) })

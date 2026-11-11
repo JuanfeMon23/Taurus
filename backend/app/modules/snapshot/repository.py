@@ -5,6 +5,9 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db.base import Base
+from app.modules.accounts.models import Account
+from app.modules.cash.models import Movement
+from app.modules.catalogs.models import MovementType, PaymentMethod
 
 CHUNK = 500
 
@@ -43,3 +46,49 @@ async def upsert_lww(session: AsyncSession, model: type[Base], rows: list[dict[s
         ).returning(table.c.id)
         applied += len((await session.execute(stmt)).all())
     return applied
+
+
+async def payment_method_accounts(session: AsyncSession, method_ids: list[str]) -> dict[str, str]:
+    """`{medio: cuenta}` de los medios guardados (los del mismo PUT los suma el controller)."""
+    if not method_ids:
+        return {}
+    rows = await session.execute(
+        select(PaymentMethod.id, PaymentMethod.account_id).where(PaymentMethod.id.in_(method_ids))
+    )
+    return {method_id: account_id for method_id, account_id in rows}
+
+
+async def payment_methods_incoherent_with_account(
+    session: AsyncSession, method_ids: list[str]
+) -> list[str]:
+    """Medios cuyo `affects_cash` no coincide con `is_cash_box` de su cuenta (ya escritos)."""
+    if not method_ids:
+        return []
+    result = await session.scalars(
+        select(PaymentMethod.id)
+        .join(Account, Account.id == PaymentMethod.account_id)
+        .where(PaymentMethod.id.in_(method_ids), PaymentMethod.affects_cash != Account.is_cash_box)
+        .order_by(PaymentMethod.id)
+    )
+    return list(result)
+
+
+async def movements_with_wrong_destination(
+    session: AsyncSession, movement_ids: list[str]
+) -> tuple[list[str], list[str]]:
+    """`(sin destino siendo traslado, con destino sin ser traslado)` entre los ya escritos."""
+    if not movement_ids:
+        return [], []
+    rows = await session.execute(
+        select(Movement.id, MovementType.requires_destination)
+        .join(MovementType, MovementType.id == Movement.type)
+        .where(
+            Movement.id.in_(movement_ids),
+            MovementType.requires_destination != Movement.to_account_id.is_not(None),
+        )
+        .order_by(Movement.id)
+    )
+    rows = rows.all()
+    missing = [movement_id for movement_id, required in rows if required]
+    forbidden = [movement_id for movement_id, required in rows if not required]
+    return missing, forbidden

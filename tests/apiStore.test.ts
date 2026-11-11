@@ -94,6 +94,38 @@ describe('apiStore', () => {
     expect(error.message).toContain('Tarifas > Catálogos')
   })
 
+  it('422 unknown_catalog_code de una cuenta nombra la cuenta, no el medio de pago', async () => {
+    const body = { code: 'unknown_catalog_code', message: 'x', details: [
+      { campo: 'movements.accountId', mensaje: 'Código de catálogo desconocido: banco' },
+      { campo: 'movements.toAccountId', mensaje: 'Código de catálogo desconocido: ahorros' },
+      { campo: 'paymentMethods.accountId', mensaje: 'Código de catálogo desconocido: nequi-cuenta' },
+    ] }
+    const error = await createApiStore('http://x', async () => json(422, body)).save({}).catch(caught => caught as Error)
+    expect(error.message).toContain('La opción «banco» de la cuenta del movimiento')
+    expect(error.message).toContain('«ahorros» de la cuenta de destino')
+    expect(error.message).toContain('«nequi-cuenta» de la cuenta del medio de pago')
+  })
+
+  it('422 account_rule_violation explica la regla en español', async () => {
+    const affects = { code: 'account_rule_violation', message: 'x', details: [{ campo: 'paymentMethods.affectsCash', mensaje: 'affectsCash must match' }] }
+    const affectsError = await createApiStore('http://x', async () => json(422, affects)).save({}).catch(caught => caught as Error)
+    expect(affectsError.message).toMatch(/medio de pago.*caja/)
+    expect(affectsError.message).not.toContain('must match')
+    const destination = { code: 'account_rule_violation', message: 'x', details: [{ campo: 'movements.toAccountId', mensaje: 'destination required' }] }
+    const destinationError = await createApiStore('http://x', async () => json(422, destination)).save({}).catch(caught => caught as Error)
+    expect(destinationError.message).toMatch(/traslado.*destino/)
+    const generic = await createApiStore('http://x', async () => json(422, { code: 'account_rule_violation', message: 'x' })).save({}).catch(caught => caught as Error)
+    expect(generic.message).toContain('cuentas')
+  })
+
+  it('load conserva las cuentas, completa vacío si faltan y descarta depositMovements', async () => {
+    const body = { accounts: [{ id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true, updatedAt: 'x', deleted: false }], depositMovements: [] }
+    const loaded = await createApiStore('http://x', async () => json(200, body)).load()
+    expect(loaded.accounts).toHaveLength(1)
+    expect('depositMovements' in loaded).toBe(false)
+    expect((await createApiStore('http://x', async () => json(200, {})).load()).accounts).toEqual([])
+  })
+
   it('save hace PUT con el cuerpo JSON', async () => {
     let seen: RequestInit | undefined
     const store = createApiStore('http://x', async (_url, init) => { seen = init; return json(200, { applied: {}, skipped: {} }) })
@@ -129,6 +161,24 @@ describe('importLocalOnce', () => {
     expect((await backend.load()).days).toHaveLength(1)
     expect(kv.entries.has(IMPORTED_KEY)).toBe(true)
     expect(kv.entries.get(LEGACY_KEY)).toBe(stateV2)
+  })
+
+  it('un taurus-state con salidas del depósito y movimientos con medio sube todo con cuenta (depositMovements ya no viaja)', async () => {
+    const backend = createMemoryStore()
+    await backend.save({
+      accounts: [{ id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true, updatedAt: 'x' }, { id: 'transferencias', name: 'Transferencias', initialBalance: 0, isCashBox: false, sortOrder: 1, active: true, updatedAt: 'x' }],
+      paymentMethods: [{ id: 'cash', name: 'Efectivo', accountId: 'caja', affectsCash: true, sortOrder: 0, active: true, updatedAt: 'x' }, { id: 'transfer', name: 'Transferencia', accountId: 'transferencias', affectsCash: false, sortOrder: 1, active: true, updatedAt: 'x' }],
+    })
+    const old = JSON.stringify({
+      version: 2, ...emptySnapshot(),
+      movements: [{ id: 'm1', date: '2026-01-01', type: 'expense', amount: 5, method: 'transfer', updatedAt: 'x' }, { id: 'm2', date: '2026-01-01', type: 'expense', amount: 6, updatedAt: 'x' }],
+      depositMovements: [{ id: 'd1', date: '2026-01-02', amount: 7000, note: 'moto', updatedAt: 'x' }, { id: 'd2', date: '2026-01-03', amount: 1, updatedAt: 'x', deleted: true }],
+    })
+    expect(await importLocalOnce(backend, kvOf({ [LEGACY_KEY]: old }))).toBe(true)
+    const { movements } = await backend.load()
+    expect(movements.map(movement => [movement.id, movement.type, movement.accountId, 'method' in movement])).toEqual([
+      ['m1', 'expense', 'transferencias', false], ['m2', 'expense', 'caja', false], ['d1', 'withdrawal', 'deposito', false],
+    ])
   })
 
   it('migra el formato anterior con fromLegacy', async () => {

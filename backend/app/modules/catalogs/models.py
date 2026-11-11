@@ -1,7 +1,7 @@
-from sqlalchemy import Boolean, CheckConstraint, Integer, SmallInteger, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Index, Integer, SmallInteger, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.db.base import Base, SyncMixin
+from app.core.db.base import Base, SyncMixin, catalog_fk
 
 
 class CatalogMixin(SyncMixin):
@@ -15,17 +15,23 @@ class CatalogMixin(SyncMixin):
 
 
 class PaymentMethod(CatalogMixin, Base):
-    """Medio de pago (`services.method`, `movements.method`)."""
+    """Medio de pago (`services.method`); `account_id` = cuenta a la que entra el dinero."""
 
     __tablename__ = "payment_methods"
-    __table_args__ = (CheckConstraint("length(trim(name)) > 0", name="name_not_empty"),)
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="name_not_empty"),
+        Index("ix_payment_methods_account_id", "account_id"),
+    )
 
+    account_id: Mapped[str] = mapped_column(Text, catalog_fk("accounts"))
+    # Derivado de la cuenta (true <=> accounts.is_cash_box); lo vigila un trigger diferido.
     affects_cash: Mapped[bool] = mapped_column(Boolean)
 
 
 class MovementType(CatalogMixin, Base):
-    """Tipo de movimiento de caja (`movements.type`); sign = efecto sobre el efectivo;
-    has_category = el movimiento admite categoría de gasto."""
+    """Tipo de movimiento de caja (`movements.type`); sign = efecto sobre la cuenta de origen;
+    has_category = admite categoría de gasto; requires_destination = es un traslado y exige
+    `movements.to_account_id` (los demás tipos lo prohíben)."""
 
     __tablename__ = "movement_types"
     __table_args__ = (
@@ -35,6 +41,7 @@ class MovementType(CatalogMixin, Base):
 
     sign: Mapped[int] = mapped_column(SmallInteger)
     has_category: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    requires_destination: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
 
 
 class FundMovementType(CatalogMixin, Base):

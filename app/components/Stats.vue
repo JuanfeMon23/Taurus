@@ -39,11 +39,11 @@ async function load() {
     templates.value = await taurus.repo.listShiftTemplates({ includeInactive: true })
     // Los días con turnos y sin viajes cuentan (100 % tiempo muerto); sus montos son 0.
     days.value = withShiftOnlyDays(await taurus.repo.listDays(), (await taurus.snapshot()).shifts.filter(shift => !shift.deleted))
-    // Gastos varios = movimientos de caja cuyo tipo lleva categoría, con cualquier medio de pago.
+    // Gastos varios = movimientos de caja cuyo tipo lleva categoría, de cualquier cuenta.
     expenses.value = (await taurus.repo.listCash()).flatMap(cashDay =>
       cashDay.movements
         .filter(movement => movementTypeHasCategory(catalogs.value.movementTypes, movement.type))
-        .map(movement => ({ date: cashDay.date, amount: movement.amount, categoryId: movement.categoryId, method: movement.method })))
+        .map(movement => ({ date: cashDay.date, amount: movement.amount, categoryId: movement.categoryId })))
     loadError.value = null
   } catch (error) {
     loadError.value = toUserMessage(error)

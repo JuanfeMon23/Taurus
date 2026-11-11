@@ -23,6 +23,7 @@ TABLES = {
     "fund_movement_types",
     "expense_categories",
     "rate_modes",
+    "accounts",
 }
 
 

@@ -136,8 +136,9 @@ async function add() {
       <span class="title">Catálogos</span>
       <p class="muted small">Opciones de medios de pago, movimientos, categorías de gasto y modos de tarifa. Una opción en uso solo se desactiva.</p>
     </div>
-    <CatalogEditor kind="paymentMethods" title="Medios de pago" hint="«Afecta caja» = el dinero entra o sale de la caja física." />
-    <CatalogEditor kind="movementTypes" title="Tipos de movimiento de caja" hint="«Suma» o «Resta» define cómo mueve el efectivo esperado." />
+    <CatalogEditor kind="accounts" title="Cuentas" hint="Dónde está el dinero: cada cuenta tiene su saldo inicial. La caja sigue el ciclo diario (apertura y cierre); su saldo inicial solo cuenta antes de abrir la primera caja." />
+    <CatalogEditor kind="paymentMethods" title="Medios de pago" hint="Cada medio lleva su dinero a una cuenta; «Afecta caja» se deriva de ella (solo si es la caja)." />
+    <CatalogEditor kind="movementTypes" title="Tipos de movimiento de caja" hint="«Suma» o «Resta» define cómo mueve la cuenta; «Lleva destino» = traslado: resta al origen y suma a la cuenta de destino." />
     <CatalogEditor kind="fundMovementTypes" title="Tipos de movimiento de fondo" hint="«Suma» o «Resta» define cómo mueve el saldo del fondo." />
     <CatalogEditor kind="expenseCategories" title="Categorías de gasto" />
     <CatalogEditor kind="rateModes" title="Modos de tarifa" hint="Qué campos pide una categoría: «Valor por km» = $ por km; «Costo cada X km» = costo total entre los km de cada intervalo." />

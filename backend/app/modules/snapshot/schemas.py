@@ -154,7 +154,13 @@ class MovementRec(SyncRecord):
     type: Code
     amount: NonNeg
     category_id: str | None = None
-    method: Annotated[Code, _none_to_default("cash")] = "cash"
+    # Cuenta de origen; si un cliente viejo no la manda, el controller la deduce de `method`
+    # (cuenta de ese medio) o usa la caja.
+    account_id: Code | None = None
+    # Solo traslados: cuenta de destino (distinta del origen).
+    to_account_id: Code | None = None
+    # Obsoleto (lo reemplaza `account_id`); solo se acepta de clientes viejos.
+    method: Code | None = None
     note: str | None = None
 
 
@@ -230,7 +236,13 @@ class CatalogRec(SyncRecord):
     active: Annotated[bool, _none_to_default(True)] = True
 
 
+class AccountRec(CatalogRec):
+    initial_balance: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
+    is_cash_box: Annotated[bool, _none_to_default(False)] = False
+
+
 class PaymentMethodRec(CatalogRec):
+    account_id: Code
     affects_cash: bool
 
 
@@ -245,16 +257,19 @@ class RateModeRec(CatalogRec):
 
 class MovementTypeRec(SignedCatalogRec):
     has_category: Annotated[bool, _none_to_default(False)] = False
+    requires_destination: Annotated[bool, _none_to_default(False)] = False
 
 
 class SnapshotWrite(CamelModel):
     """Snapshot parcial: cualquier subconjunto de colecciones."""
 
+    accounts: list[AccountRec] = []
     categories: list[CategoryRec] = []
     days: list[DayRec] = []
     services: list[ServiceRec] = []
     cash: list[CashRec] = []
     movements: list[MovementRec] = []
+    # Obsoleto: al escribir se convierte en movimientos de la cuenta `deposito`; al leer va vacío.
     deposit_movements: list[DepositMovementRec] = []
     fund_movements: list[FundMovementRec] = []
     settings: list[SettingRec] = []

@@ -1,5 +1,5 @@
 /** Lógica pura de catálogos (medios de pago, tipos de movimiento, categorías de gasto). Los datos viven en BD, no aquí. */
-import type { CatalogEntry, CatalogKind, MovementTypeEntry, PaymentMethod, SignedEntry, Snapshot } from '../services/types'
+import type { Account, CatalogEntry, CatalogKind, MovementTypeEntry, PaymentMethod, SignedEntry, Snapshot } from '../services/types'
 
 /** Orden de presentación: `sortOrder` y luego nombre. Devuelve una copia. */
 export const sortCatalog = <Entry extends CatalogEntry>(entries: Entry[]): Entry[] =>
@@ -30,6 +30,26 @@ export function methodAffectsCash(methods: PaymentMethod[], code: string | undef
   return methods.find(method => method.id === id)?.affectsCash ?? true
 }
 
+/** Cuenta que es la caja física (la del ciclo diario); undefined si el catálogo aún no trae cuentas. */
+export const cashBoxAccountId = (accounts: Account[]): string | undefined => accounts.find(account => account.isCashBox)?.id
+
+/** ¿La cuenta es la caja física? Regla segura (igual que los medios): sin código, o un código que no está en el catálogo, cuenta como caja. */
+export function accountIsCashBox(accounts: Account[], accountId: string | undefined): boolean {
+  if (accountId === undefined) return true
+  return accounts.find(account => account.id === accountId)?.isCashBox ?? true
+}
+
+/** Cuenta a la que lleva su dinero un medio de pago; sin código se usa el medio por defecto. undefined si el medio no está en el catálogo. */
+export const methodAccountId = (methods: PaymentMethod[], code: string | undefined): string | undefined =>
+  methods.find(method => method.id === (code ?? defaultMethodId(methods)))?.accountId
+
+/** Cuenta de origen de un movimiento: la suya o, en datos viejos (solo `method`), la de su medio de pago; si no hay, la caja. */
+export const movementAccountId = (movement: { accountId?: string; method?: string }, catalogs: { accounts: Account[]; paymentMethods: PaymentMethod[] }): string | undefined =>
+  movement.accountId ?? methodAccountId(catalogs.paymentMethods, movement.method) ?? cashBoxAccountId(catalogs.accounts)
+
+/** ¿El tipo pide cuenta de destino (traslado)? Un código que no está en el catálogo no la pide. */
+export const movementTypeRequiresDestination = (types: MovementTypeEntry[], code: string): boolean => types.find(type => type.id === code)?.requiresDestination ?? false
+
 /** Signo del tipo (+1 suma, −1 resta). Regla segura: un código que no está en el catálogo vale 0 y no mueve nada. */
 export const movementSign = (types: SignedEntry[], code: string): 1 | -1 | 0 => types.find(type => type.id === code)?.sign ?? 0
 
@@ -37,9 +57,11 @@ export const movementSign = (types: SignedEntry[], code: string): 1 | -1 | 0 => 
 export const movementTypeHasCategory = (types: MovementTypeEntry[], code: string): boolean => types.find(type => type.id === code)?.hasCategory ?? false
 
 /** ¿Algún registro vivo usa este código? Si sí, la entrada solo se puede desactivar, no borrar. */
-export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements' | 'categories'>, kind: CatalogKind, id: string): boolean {
+export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements' | 'categories' | 'paymentMethods'>, kind: CatalogKind, id: string): boolean {
   const alive = <Record extends { deleted?: boolean }>(records: Record[]) => records.filter(record => !record.deleted)
   switch (kind) {
+    case 'accounts':
+      return alive(snapshot.movements).some(movement => movement.accountId === id || movement.toAccountId === id) || alive(snapshot.paymentMethods).some(method => method.accountId === id)
     case 'paymentMethods':
       return alive(snapshot.services).some(service => service.method === id) || alive(snapshot.movements).some(movement => movement.method === id)
     case 'movementTypes':
@@ -54,10 +76,12 @@ export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movemen
 }
 
 /** Códigos de catálogo que cada colección de registros guarda (sin llave foránea); el backend los valida en el PUT. */
-const CATALOG_REFERENCES: { collection: 'categories' | 'services' | 'movements' | 'fundMovements'; field: string; kind: CatalogKind }[] = [
+const CATALOG_REFERENCES: { collection: 'categories' | 'services' | 'movements' | 'fundMovements' | 'paymentMethods'; field: string; kind: CatalogKind }[] = [
   { collection: 'categories', field: 'rateMode', kind: 'rateModes' },
   { collection: 'services', field: 'method', kind: 'paymentMethods' },
-  { collection: 'movements', field: 'method', kind: 'paymentMethods' },
+  { collection: 'movements', field: 'accountId', kind: 'accounts' },
+  { collection: 'movements', field: 'toAccountId', kind: 'accounts' },
+  { collection: 'paymentMethods', field: 'accountId', kind: 'accounts' },
   { collection: 'movements', field: 'type', kind: 'movementTypes' },
   { collection: 'movements', field: 'categoryId', kind: 'expenseCategories' },
   { collection: 'fundMovements', field: 'type', kind: 'fundMovementTypes' },

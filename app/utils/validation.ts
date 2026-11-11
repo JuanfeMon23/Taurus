@@ -3,9 +3,14 @@ import { slugifyCode } from './catalogs'
 const isPositiveAmount = (amount: number | null | undefined): amount is number => typeof amount === 'number' && Number.isFinite(amount) && amount > 0
 
 /** Mensaje en español si el movimiento de caja no es válido; null si lo es. */
-export function validateMovementInput(input: { type: string; amount: number | null | undefined }): string | null {
+export function validateMovementInput(input: { type: string; amount: number | null | undefined; accountId: string; toAccountId?: string; requiresDestination?: boolean }): string | null {
   if (!input.type) return 'Elige el tipo de movimiento.'
   if (!isPositiveAmount(input.amount)) return 'Escribe un monto mayor que cero.'
+  if (!input.accountId) return 'Elige la cuenta.'
+  if (input.requiresDestination) {
+    if (!input.toAccountId) return 'Elige la cuenta de destino.'
+    if (input.toAccountId === input.accountId) return 'El destino debe ser distinto de la cuenta de origen.'
+  }
   return null
 }
 

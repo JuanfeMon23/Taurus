@@ -2,14 +2,20 @@ import type { Catalogs } from '../../app/services/types'
 
 /** Catálogos de prueba con la misma forma que las semillas del backend. */
 export const testCatalogs = (): Catalogs => ({
+  accounts: [
+    { id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true },
+    { id: 'transferencias', name: 'Transferencias', initialBalance: 0, isCashBox: false, sortOrder: 1, active: true },
+    { id: 'deposito', name: 'Depósito', initialBalance: 0, isCashBox: false, sortOrder: 2, active: true },
+  ],
   paymentMethods: [
-    { id: 'cash', name: 'Efectivo', affectsCash: true, sortOrder: 0, active: true },
-    { id: 'transfer', name: 'Transferencia', affectsCash: false, sortOrder: 1, active: true },
+    { id: 'cash', name: 'Efectivo', accountId: 'caja', affectsCash: true, sortOrder: 0, active: true },
+    { id: 'transfer', name: 'Transferencia', accountId: 'transferencias', affectsCash: false, sortOrder: 1, active: true },
   ],
   movementTypes: [
-    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, sortOrder: 0, active: true },
-    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, sortOrder: 1, active: true },
-    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, sortOrder: 2, active: true },
+    { id: 'expense', name: 'Gasto', sign: -1, hasCategory: true, requiresDestination: false, sortOrder: 0, active: true },
+    { id: 'withdrawal', name: 'Retiro', sign: -1, hasCategory: false, requiresDestination: false, sortOrder: 1, active: true },
+    { id: 'deposit', name: 'Aporte', sign: 1, hasCategory: false, requiresDestination: false, sortOrder: 2, active: true },
+    { id: 'traslado', name: 'Traslado', sign: -1, hasCategory: false, requiresDestination: true, sortOrder: 3, active: true },
   ],
   fundMovementTypes: [
     { id: 'transfer', name: 'Envío', sign: 1, sortOrder: 0, active: true },
