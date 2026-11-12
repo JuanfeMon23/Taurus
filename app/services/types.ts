@@ -120,6 +120,11 @@ export interface CatalogEntry {
 export interface Account extends CatalogEntry {
   initialBalance: number
   isCashBox: boolean
+  /**
+   * Fecha ISO desde la que la cuenta es la de comisión: su saldo baja con la comisión + IVA de los viajes inDrive de esa fecha en adelante.
+   * Ausente = cuenta corriente. Solo una cuenta la lleva y nunca la caja.
+   */
+  commissionSince?: string
 }
 
 /** Medio de pago: lleva su dinero a una cuenta; `affectsCash` = esa cuenta es la caja (se deriva de la cuenta, no se edita). */

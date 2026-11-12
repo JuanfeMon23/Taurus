@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.modules.accounts.models import Account
@@ -29,11 +29,70 @@ async def test_accounts_are_seeded_with_cash_box_only_in_caja(session: AsyncSess
     rows = (await session.execute(select(Account).order_by(Account.sort_order))).scalars().all()
     assert [(row.id, row.name, row.is_cash_box) for row in rows] == [
         ("caja", "Caja", True),
-        ("transferencias", "Transferencias", False),
+        ("transferencias", "Nequi", False),
         ("deposito", "Depósito", False),
+        ("bancolombia", "Bancolombia", False),
+        ("indrive", "Saldo inDrive", False),
     ]
     assert all(row.initial_balance == 0 and row.active and not row.deleted for row in rows)
-    assert all(row.updated_at.year == 2000 for row in rows)
+    untouched = [row for row in rows if row.id in ("caja", "deposito", "bancolombia", "indrive")]
+    assert all(row.updated_at.year == 2000 for row in untouched)
+
+
+async def test_only_indrive_account_carries_commission_since(session: AsyncSession) -> None:
+    rows = (
+        (await session.execute(select(Account).where(Account.commission_since.is_not(None))))
+        .scalars()
+        .all()
+    )
+    assert [(row.id, row.commission_since) for row in rows] == [("indrive", date(2026, 11, 12))]
+
+
+async def test_second_commission_account_is_rejected(session: AsyncSession) -> None:
+    session.add(Account(id="otra", name="Otra", commission_since=DEFAULT_DATE))
+    with pytest.raises(IntegrityError, match="uq_accounts_commission_since"):
+        await session.flush()
+
+
+async def test_cash_box_cannot_carry_commission_since(session: AsyncSession) -> None:
+    await session.execute(text("update accounts set commission_since = null"))
+    with pytest.raises(IntegrityError, match="ck_accounts_commission_not_cash_box"):
+        await session.execute(
+            text("update accounts set commission_since = '2026-11-12' where id = 'caja'")
+        )
+
+
+async def test_payment_method_cannot_point_to_commission_account(session: AsyncSession) -> None:
+    session.add(
+        PaymentMethod(id="recarga", name="Recarga", account_id="indrive", affects_cash=False)
+    )
+    await session.flush()
+    with pytest.raises(IntegrityError, match="commission account"):
+        await check_deferred_constraints(session)
+
+
+async def test_commission_flag_on_account_with_methods_is_rejected(session: AsyncSession) -> None:
+    await session.execute(text("update accounts set commission_since = null"))
+    await session.execute(
+        text("update accounts set commission_since = '2026-11-12' where id = 'bancolombia'")
+    )
+    with pytest.raises(IntegrityError, match="commission account"):
+        await check_deferred_constraints(session)
+
+
+async def test_account_with_movements_cannot_be_deactivated(session: AsyncSession) -> None:
+    session.add(movement(type="traslado", account_id="transferencias", to_account_id="indrive"))
+    await session.flush()
+    for column, value in (("active", "false"), ("deleted", "true")):
+        with pytest.raises(DBAPIError, match="cannot be deactivated"):
+            async with session.begin_nested():
+                await session.execute(
+                    text(f"update accounts set {column} = {value} where id = 'indrive'")
+                )
+
+
+async def test_account_without_movements_can_be_deactivated(session: AsyncSession) -> None:
+    await session.execute(text("update accounts set active = false where id = 'bancolombia'"))
 
 
 async def test_second_cash_box_account_is_rejected(session: AsyncSession) -> None:
@@ -53,6 +112,16 @@ async def test_payment_methods_point_to_their_account(session: AsyncSession) -> 
     assert {row.id: row.account_id for row in rows} == {
         "cash": "caja",
         "transfer": "transferencias",
+        "bancolombia": "bancolombia",
+    }
+
+
+async def test_payment_methods_are_named_nequi_and_bancolombia(session: AsyncSession) -> None:
+    rows = (await session.execute(select(PaymentMethod))).scalars().all()
+    assert {row.id: (row.name, row.affects_cash) for row in rows} == {
+        "cash": ("Efectivo", True),
+        "transfer": ("Nequi", False),
+        "bancolombia": ("Bancolombia", False),
     }
 
 
@@ -180,4 +249,47 @@ async def test_0014_backfills_accounts_and_migrates_deposit_withdrawals(
         async with engine.begin() as conn:
             await conn.execute(text("delete from movements where id in ('mc','mt','d1','d2')"))
             await conn.execute(text("delete from deposit_movements where id in ('d1','d2')"))
+        await engine.dispose()
+
+
+async def test_0015_downgrade_merges_bancolombia_into_transferencias_and_upgrade_restores_seeds(
+    test_url: str, alembic: Callable[..., None]
+) -> None:
+    engine = create_async_engine(test_url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "insert into movements (id, date, type, amount, method, account_id, "
+                    "to_account_id, deleted, updated_at) values "
+                    "('b1', '2026-11-12', 'expense', 5, 'bancolombia', 'bancolombia', null, "
+                    "false, '2026-01-01'), "
+                    "('t1', '2026-11-12', 'traslado', 9, null, 'transferencias', 'indrive', "
+                    "false, '2026-01-01'), "
+                    "('t2', '2026-11-12', 'traslado', 7, null, 'transferencias', 'bancolombia', "
+                    "false, '2026-01-01')"
+                )
+            )
+        alembic("downgrade", "0014")
+        async with engine.connect() as conn:
+            accounts = {
+                row.id: row.name
+                for row in await conn.execute(text("select id, name from accounts"))
+            }
+            moved = {
+                row.id: row.account_id
+                for row in await conn.execute(text("select id, account_id from movements"))
+            }
+            methods = {
+                row.id: row.name
+                for row in await conn.execute(text("select id, name from payment_methods"))
+            }
+        assert accounts["transferencias"] == "Transferencias"
+        assert "bancolombia" not in accounts and "indrive" not in accounts
+        assert methods == {"cash": "Efectivo", "transfer": "Transferencia"}
+        assert moved == {"b1": "transferencias"}
+    finally:
+        alembic("upgrade", "head")
+        async with engine.begin() as conn:
+            await conn.execute(text("delete from movements where id in ('b1', 't1', 't2')"))
         await engine.dispose()

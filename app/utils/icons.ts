@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowLeftRight, ArrowUpCircle, ArrowUpFromLine, Banknote, Fuel, HandCoins, Landmark, PiggyBank, Receipt, ShieldCheck, Vault, Wallet, Wrench } from 'lucide-vue-next'
+import { ArrowDownToLine, ArrowLeftRight, ArrowUpCircle, ArrowUpFromLine, Banknote, CarTaxiFront, Fuel, HandCoins, Landmark, PiggyBank, Receipt, ShieldCheck, Smartphone, Vault, Wallet, Wrench } from 'lucide-vue-next'
 
 /** Icono de una categoría de costo según su nombre. */
 export function categoryIcon(name: string) {
@@ -9,8 +9,8 @@ export function categoryIcon(name: string) {
 }
 
 /* Íconos por código de catálogo: solo presentación; un código nuevo cae en el ícono genérico. */
-const METHOD_ICONS = { cash: Banknote, transfer: ArrowLeftRight }
-const ACCOUNT_ICONS = { caja: Wallet, transferencias: ArrowLeftRight, deposito: Vault }
+const METHOD_ICONS = { cash: Banknote, transfer: Smartphone, bancolombia: Landmark }
+const ACCOUNT_ICONS = { caja: Wallet, transferencias: Smartphone, bancolombia: Landmark, deposito: Vault, indrive: CarTaxiFront }
 const MOVEMENT_ICONS = { expense: ArrowUpCircle, withdrawal: HandCoins, deposit: PiggyBank }
 const FUND_MOVEMENT_ICONS = { transfer: ArrowDownToLine, spend: ArrowUpFromLine }
 

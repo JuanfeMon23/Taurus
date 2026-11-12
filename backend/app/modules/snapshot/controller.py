@@ -28,6 +28,7 @@ from app.modules.snapshot.exceptions import (
     UnknownCatalogCode,
 )
 from app.modules.snapshot.schemas import (
+    AccountRec,
     DepositMovementRec,
     MovementRec,
     PaymentMethodRec,
@@ -37,12 +38,18 @@ from app.modules.snapshot.schemas import (
 )
 
 FOREIGN_KEY_VIOLATION = "23503"
+UNIQUE_VIOLATION = "23505"
 CHECK_VIOLATION = "23514"
 SHIFT_REQUIRED_CONSTRAINT = "ck_services_shift_required"
 DISTINCT_ACCOUNTS_CONSTRAINT = "ck_movements_distinct_accounts"
 # Los triggers de 0014 no nombran constraint: se reconocen por su mensaje.
 CASH_COHERENCE_MESSAGE = "affects_cash must match"
 DESTINATION_MESSAGE = "to_account_id"
+# Los de 0015 tampoco: triggers por mensaje; el CHECK y el índice único, por nombre.
+COMMISSION_METHOD_MESSAGES = ("cannot be the commission account", "cannot point to the commission")
+DEACTIVATION_MESSAGE = "cannot be deactivated or deleted"
+COMMISSION_NOT_CASH_BOX_CONSTRAINT = "ck_accounts_commission_not_cash_box"
+COMMISSION_UNIQUE_CONSTRAINT = "uq_accounts_commission_since"
 CASH_BOX_ACCOUNT = "caja"
 DEPOSIT_ACCOUNT = "deposito"
 DEPOSIT_WITHDRAWAL_TYPE = "withdrawal"
@@ -51,7 +58,6 @@ KEY_DETAIL = re.compile(r"\((?P<column>\w+)\)=\((?P<value>.*?)\)")  # sin depend
 # colección del snapshot -> modelo
 # Orden: catálogos primero (las FK son diferidas, pero así el orden es legible).
 MODELS: dict[str, type[Base]] = {
-    "accounts": Account,
     "rate_modes": RateMode,
     "categories": Category,
     "days": Day,
@@ -59,6 +65,9 @@ MODELS: dict[str, type[Base]] = {
     "cash": CashDay,
     "movements": Movement,
     "fund_movements": FundMovement,
+    # Después de los movimientos: desactivar/borrar una cuenta exige que sus movimientos ya estén
+    # borrados (el trigger de la BD lo comprueba en el momento).
+    "accounts": Account,
     "settings": Setting,
     "shifts": Shift,
     "shift_templates": ShiftTemplate,
@@ -131,9 +140,13 @@ def ensure_live_trips_have_shift(services: list[Any]) -> None:
         raise TripRequiresShift
 
 
-def _check_violation_cause(error: IntegrityError) -> Any | None:
+def _violation_cause(error: IntegrityError, *sqlstates: str) -> Any | None:
     cause = getattr(error.orig, "__cause__", None) or error.orig
-    return cause if getattr(cause, "sqlstate", None) == CHECK_VIOLATION else None
+    return cause if getattr(cause, "sqlstate", None) in sqlstates else None
+
+
+def _check_violation_cause(error: IntegrityError) -> Any | None:
+    return _violation_cause(error, CHECK_VIOLATION)
 
 
 def _is_shift_required_violation(error: IntegrityError) -> bool:
@@ -143,11 +156,20 @@ def _is_shift_required_violation(error: IntegrityError) -> bool:
 
 def _account_rule_detail(error: IntegrityError) -> dict[str, str] | None:
     """Detalle `{campo, mensaje}` si el CHECK o trigger de cuentas falló; si no, None."""
-    cause = _check_violation_cause(error)
+    cause = _violation_cause(error, CHECK_VIOLATION, UNIQUE_VIOLATION)
     if cause is None:
         return None
     message = str(getattr(cause, "message", "") or cause)
-    if getattr(cause, "constraint_name", None) == DISTINCT_ACCOUNTS_CONSTRAINT:
+    constraint = getattr(cause, "constraint_name", None)
+    if constraint == COMMISSION_UNIQUE_CONSTRAINT:
+        return _MANY_COMMISSION_DETAIL
+    if constraint == COMMISSION_NOT_CASH_BOX_CONSTRAINT:
+        return _CASH_BOX_COMMISSION_DETAIL
+    if any(fragment in message for fragment in COMMISSION_METHOD_MESSAGES):
+        return _METHOD_COMMISSION_DETAIL
+    if DEACTIVATION_MESSAGE in message:
+        return _DEACTIVATION_DETAIL
+    if constraint == DISTINCT_ACCOUNTS_CONSTRAINT:
         return _SAME_ACCOUNT_DETAIL
     if CASH_COHERENCE_MESSAGE in message:
         return _CASH_COHERENCE_DETAIL
@@ -159,6 +181,22 @@ def _account_rule_detail(error: IntegrityError) -> dict[str, str] | None:
 _SAME_ACCOUNT_DETAIL = {
     "campo": "movements.toAccountId",
     "mensaje": "El destino debe ser distinto de la cuenta de origen",
+}
+_MANY_COMMISSION_DETAIL = {
+    "campo": "accounts.commissionSince",
+    "mensaje": "Solo una cuenta puede ser la de comisión",
+}
+_CASH_BOX_COMMISSION_DETAIL = {
+    "campo": "accounts.commissionSince",
+    "mensaje": "La caja no puede ser la cuenta de comisión",
+}
+_METHOD_COMMISSION_DETAIL = {
+    "campo": "paymentMethods.accountId",
+    "mensaje": "Un medio de pago no puede apuntar a la cuenta de comisión",
+}
+_DEACTIVATION_DETAIL = {
+    "campo": "accounts.active",
+    "mensaje": "Una cuenta con movimientos no se puede desactivar ni borrar",
 }
 _CASH_COHERENCE_DETAIL = {
     "campo": "paymentMethods.affectsCash",
@@ -196,6 +234,16 @@ def ensure_transfer_accounts_differ(movements: list[MovementRec]) -> None:
         raise AccountRuleViolation([_SAME_ACCOUNT_DETAIL])
 
 
+def ensure_commission_accounts_valid(accounts: list[AccountRec]) -> None:
+    """Antes de tocar la BD: a lo sumo una cuenta de comisión y nunca la caja."""
+    with_commission = [rec for rec in _latest_per_id(accounts) if rec.commission_since is not None]
+    details = [_CASH_BOX_COMMISSION_DETAIL for rec in with_commission if rec.is_cash_box]
+    if len(with_commission) > 1:
+        details.append(_MANY_COMMISSION_DETAIL)
+    if details:
+        raise AccountRuleViolation(details)
+
+
 async def check_account_rules(
     session: AsyncSession, payment_methods: list[PaymentMethodRec], movements: list[MovementRec]
 ) -> None:
@@ -219,6 +267,10 @@ async def check_account_rules(
     details += [
         {"campo": "movements.toAccountId", "mensaje": "Solo un traslado lleva cuenta de destino"}
         for _ in forbidden
+    ]
+    details += [
+        {"campo": "paymentMethods.accountId", "mensaje": _METHOD_COMMISSION_DETAIL["mensaje"]}
+        for _ in await repository.payment_methods_pointing_to_commission_account(session)
     ]
     if details:
         raise AccountRuleViolation(details)
@@ -254,6 +306,7 @@ async def apply_snapshot(session: AsyncSession, snapshot: SnapshotWrite) -> Snap
         session, snapshot.movements, snapshot.payment_methods
     )
     ensure_transfer_accounts_differ(movements)
+    ensure_commission_accounts_valid(snapshot.accounts)
     incoming = {col: getattr(snapshot, col) for col in MODELS}
     incoming["movements"] = movements
     applied: dict[str, int] = {}

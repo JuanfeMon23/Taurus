@@ -1,8 +1,9 @@
 import { computeDay, type Category } from '../utils/calc'
 import { DEPOSIT_ACCOUNT_ID } from '../utils/accounts'
-import { catalogEntryInUse, defaultMethodId, movementAccountId, movementTypeRequiresDestination, slugifyCode, sortCatalog, withReferencedCatalogs } from '../utils/catalogs'
+import { accountHasMovements, catalogEntryInUse, defaultMethodId, movementAccountId, movementTypeRequiresDestination, slugifyCode, sortCatalog, withReferencedCatalogs } from '../utils/catalogs'
 import { DEFAULT_RATES, dayNet, sumCommission, type CommissionRates } from '../utils/commission'
 import { tripTotal } from '../utils/trip'
+import { ACCOUNT_RULE_MESSAGES, validateAccountRules, validateMethodAccount } from '../utils/validation'
 import { sortShiftTemplates } from '../utils/shifts'
 import { ApiError } from './apiStore'
 import { SEED_CATALOGS } from './catalogSeeds'
@@ -10,7 +11,7 @@ import { EPOCH, newId, now } from './ids'
 import { upsert } from './memoryStore'
 import { same } from './merge'
 import type {
-  AccountRec, CashDay, CashMeta, CashMovement, CatalogEntry, CatalogKind, Catalogs, CategoryRec, DatedMovement, DayMeta, DayRecord, FundMovement, FundMovementRec, Meta, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Shift, ShiftRec,
+  Account, AccountRec, CashDay, CashMeta, CashMovement, CatalogEntry, CatalogKind, Catalogs, CategoryRec, DatedMovement, DayMeta, DayRecord, FundMovement, FundMovementRec, Meta, MovementRec, NewCategory, Repo, Service, ServiceRec, SettingsRec, Shift, ShiftRec,
   ShiftTemplate, ShiftTemplateRec, Snapshot, Store,
 } from './types'
 
@@ -287,16 +288,21 @@ export function createTaurus(store: Store, opts: { onChange?: () => void } = {})
       if (kind === 'paymentMethods') {
         const account = live(snapshot.accounts).find(candidate => candidate.id === record.accountId)
         if (!account) throw new ApiError('Elige la cuenta del medio de pago.')
+        const methodError = validateMethodAccount(account.id, live(snapshot.accounts))
+        if (methodError) throw new ApiError(methodError)
         record.affectsCash = account.isCashBox // se deriva de la cuenta, no se edita
       } else if (kind === 'accounts') {
         record.initialBalance ??= 0
         record.isCashBox ??= false
+        const accountError = validateAccountRules(record as unknown as Account, live(snapshot.accounts).filter(other => other.id !== id), accountHasMovements(snapshot.movements, id))
+        if (accountError) throw new ApiError(accountError)
       } else if (kind === 'movementTypes') record.requiresDestination ??= false
       await put({ [kind]: [record] })
       return withoutMeta(record) as never
     },
     async deleteCatalogEntry(kind, id) {
       const snapshot = await loadState()
+      if (kind === 'accounts' && accountHasMovements(snapshot.movements, id)) throw new ApiError(ACCOUNT_RULE_MESSAGES.hasMovements)
       if (catalogEntryInUse(snapshot, kind, id)) throw new ApiError('No se puede borrar: está en uso. Desactívala para dejar de ofrecerla.')
       const previous = (snapshot[kind] as (CatalogEntry & Meta)[]).find(entry => entry.id === id && !entry.deleted)
       if (previous) await put({ [kind]: [{ ...previous, deleted: true, updatedAt: now() }] })

@@ -1,5 +1,7 @@
 /** Mensaje legible para el 422 `unknown_catalog_code` del backend (un código de catálogo que la base no conoce). */
 
+import { ACCOUNT_RULE_MESSAGES } from './validation'
+
 const FIELD_LABELS: Record<string, string> = {
   'categories.rateMode': 'el modo de tarifa',
   'services.method': 'el medio de pago',
@@ -28,6 +30,9 @@ export const missingShiftMessage = (details: unknown): string =>
 
 const ACCOUNT_RULE_PHRASES: Record<string, string> = {
   'paymentMethods.affectsCash': 'Un medio de pago afecta la caja solo si su cuenta es la caja; cambia la cuenta del medio en Tarifas > Catálogos.',
+  'accounts.commissionSince': `${ACCOUNT_RULE_MESSAGES.singleCommission}, y nunca la caja.`,
+  'paymentMethods.accountId': `${ACCOUNT_RULE_MESSAGES.methodOnCommission}.`,
+  'accounts.active': `${ACCOUNT_RULE_MESSAGES.hasMovements}.`,
   'movements.toAccountId': 'Un traslado necesita una cuenta de destino distinta de la de origen; los demás movimientos no llevan destino.',
 }
 

@@ -239,6 +239,9 @@ class CatalogRec(SyncRecord):
 class AccountRec(CatalogRec):
     initial_balance: Annotated[NonNeg, _none_to_default(0)] = Decimal(0)
     is_cash_box: Annotated[bool, _none_to_default(False)] = False
+    # Fecha desde la que la cuenta descuenta la comisión + IVA de los viajes inDrive; a lo sumo
+    # una cuenta, nunca la caja.
+    commission_since: date | None = None
 
 
 class PaymentMethodRec(CatalogRec):

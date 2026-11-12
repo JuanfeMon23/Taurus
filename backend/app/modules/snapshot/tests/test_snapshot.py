@@ -872,8 +872,14 @@ async def test_turno_con_template_id_inexistente_devuelve_422(client: AsyncClien
 
 
 def transfer(**overrides: Any) -> dict[str, Any]:
-    fields = {"type": "traslado", "accountId": "caja", "toAccountId": "deposito", **overrides}
-    return movement(id="t1", **fields)
+    fields = {
+        "id": "t1",
+        "type": "traslado",
+        "accountId": "caja",
+        "toAccountId": "deposito",
+        **overrides,
+    }
+    return movement(**fields)
 
 
 async def assert_account_rule_violation(response: Any, field: str) -> None:
@@ -1014,3 +1020,184 @@ async def test_red_de_seguridad_misma_cuenta_del_check_se_traduce_a_422(
     monkeypatch.setattr(controller, "ensure_transfer_accounts_differ", lambda _records: None)
     response = await put(client, {"movements": [transfer(toAccountId="caja")]})
     await assert_account_rule_violation(response, "movements.toAccountId")
+
+
+# --- Cuenta de comisión (commissionSince) y bloqueo de cuentas con movimientos ---------------
+
+
+async def assert_account_rule_message(response: Any, field: str, expected_message: str) -> None:
+    await assert_account_rule_violation(response, field)
+    assert expected_message in response.json()["details"][0]["mensaje"]
+
+
+async def account_by_id(client: AsyncClient, account_id: str) -> dict[str, Any]:
+    return next(rec for rec in await get_col(client, "accounts") if rec["id"] == account_id)
+
+
+async def test_semilla_de_cuentas_trae_commission_since_solo_en_indrive(
+    client: AsyncClient,
+) -> None:
+    accounts = {rec["id"]: rec for rec in await get_col(client, "accounts")}
+    assert accounts["indrive"]["commissionSince"] == "2026-11-12"
+    assert accounts["caja"].get("commissionSince") is None
+    assert accounts["bancolombia"].get("commissionSince") is None
+
+
+async def test_commission_since_se_actualiza_con_lww(client: AsyncClient) -> None:
+    newer = {"id": "indrive", "name": "Saldo inDrive", "updatedAt": T_FUTURE}
+    response = await put(client, {"accounts": [{**newer, "commissionSince": "2026-12-01"}]})
+    assert response.status_code == 200 and response.json()["applied"]["accounts"] == 1
+    assert (await account_by_id(client, "indrive"))["commissionSince"] == "2026-12-01"
+    stale = {**newer, "updatedAt": T1, "commissionSince": "2027-01-01"}
+    response = await put(client, {"accounts": [stale]})
+    assert response.json()["skipped"]["accounts"] == 1
+    assert (await account_by_id(client, "indrive"))["commissionSince"] == "2026-12-01"
+
+
+async def test_dos_cuentas_de_comision_en_el_mismo_put_422(client: AsyncClient) -> None:
+    accounts = [
+        catalog_item(id="otra-a", commissionSince="2026-11-01"),
+        catalog_item(id="otra-b", commissionSince="2026-11-02"),
+    ]
+    response = await put(client, {"accounts": accounts})
+    await assert_account_rule_message(
+        response, "accounts.commissionSince", "Solo una cuenta puede ser la de comisión"
+    )
+
+
+async def test_segunda_cuenta_de_comision_contra_la_guardada_422(client: AsyncClient) -> None:
+    response = await put(
+        client, {"accounts": [catalog_item(id="otra", commissionSince="2026-11-01")]}
+    )
+    await assert_account_rule_message(
+        response, "accounts.commissionSince", "Solo una cuenta puede ser la de comisión"
+    )
+    assert "otra" not in {rec["id"] for rec in await get_col(client, "accounts")}
+
+
+async def test_la_caja_no_puede_ser_cuenta_de_comision_422(client: AsyncClient) -> None:
+    caja = catalog_item(id="caja", name="Caja", isCashBox=True, commissionSince="2026-11-01")
+    response = await put(client, {"accounts": [{**caja, "updatedAt": T_FUTURE}]})
+    await assert_account_rule_message(
+        response, "accounts.commissionSince", "La caja no puede ser la cuenta de comisión"
+    )
+
+
+async def test_medio_de_pago_apuntando_a_la_cuenta_de_comision_422(client: AsyncClient) -> None:
+    item = catalog_item(accountId="indrive", affectsCash=False)
+    response = await put(client, {"paymentMethods": [item]})
+    await assert_account_rule_message(
+        response, "paymentMethods.accountId", "no puede apuntar a la cuenta de comisión"
+    )
+    assert "tst-item" not in {rec["id"] for rec in await get_col(client, "paymentMethods")}
+
+
+async def test_marcar_comision_una_cuenta_con_medios_de_pago_422(client: AsyncClient) -> None:
+    unset = {"id": "indrive", "name": "X", "updatedAt": T_FUTURE}
+    marked = {
+        "id": "bancolombia",
+        "name": "X",
+        "updatedAt": T_FUTURE,
+        "commissionSince": "2026-11-01",
+    }
+    response = await put(client, {"accounts": [unset, marked]})
+    await assert_account_rule_message(
+        response, "paymentMethods.accountId", "no puede apuntar a la cuenta de comisión"
+    )
+    assert (await account_by_id(client, "bancolombia")).get("commissionSince") is None
+
+
+async def test_traslados_deposito_a_bancolombia_y_bancolombia_a_indrive_se_aceptan(
+    client: AsyncClient,
+) -> None:
+    movements = [
+        transfer(id="t1", accountId="deposito", toAccountId="bancolombia", amount=100),
+        transfer(id="t2", accountId="bancolombia", toAccountId="indrive", amount=60),
+    ]
+    response = await put(client, {"movements": movements})
+    assert response.status_code == 200 and response.json()["applied"]["movements"] == 2
+
+
+async def test_desactivar_cuenta_con_movimientos_vivos_422(client: AsyncClient) -> None:
+    await put(client, {"movements": [transfer(accountId="deposito", toAccountId="bancolombia")]})
+    for account_id in ("deposito", "bancolombia"):
+        account = {"id": account_id, "name": "X", "active": False, "updatedAt": T_FUTURE}
+        response = await put(client, {"accounts": [account]})
+        await assert_account_rule_message(
+            response, "accounts.active", "no se puede desactivar ni borrar"
+        )
+    assert (await account_by_id(client, "bancolombia"))["active"] is True
+
+
+async def test_borrar_cuenta_con_movimientos_vivos_422(client: AsyncClient) -> None:
+    await put(client, {"movements": [movement(accountId="bancolombia")]})
+    account = {"id": "bancolombia", "name": "X", "deleted": True, "updatedAt": T_FUTURE}
+    response = await put(client, {"accounts": [account]})
+    await assert_account_rule_message(response, "accounts.active", "no se puede desactivar")
+
+
+async def test_desactivar_cuenta_cuyos_movimientos_se_borran_en_el_mismo_put(
+    client: AsyncClient,
+) -> None:
+    await put(client, {"movements": [movement(accountId="bancolombia")]})
+    account = {"id": "bancolombia", "name": "X", "active": False, "updatedAt": T_FUTURE}
+    tombstone = movement(accountId="bancolombia", deleted=True, updatedAt=T2)
+    response = await put(client, {"accounts": [account], "movements": [tombstone]})
+    assert response.status_code == 200
+    assert (await account_by_id(client, "bancolombia"))["active"] is False
+
+
+async def test_desactivar_cuenta_sin_movimientos_se_acepta(client: AsyncClient) -> None:
+    account = {"id": "bancolombia", "name": "X", "active": False, "updatedAt": T_FUTURE}
+    assert (await put(client, {"accounts": [account]})).status_code == 200
+
+
+async def test_red_de_seguridad_medio_apuntando_a_comision_de_los_triggers_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "check_account_rules", skip_account_rules)
+    item = catalog_item(accountId="indrive", affectsCash=False)
+    response = await put(client, {"paymentMethods": [item]})
+    await assert_account_rule_message(
+        response, "paymentMethods.accountId", "no puede apuntar a la cuenta de comisión"
+    )
+
+
+async def test_red_de_seguridad_cuenta_de_comision_con_medios_de_los_triggers_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "check_account_rules", skip_account_rules)
+    unset = {"id": "indrive", "name": "X", "updatedAt": T_FUTURE}
+    marked = {
+        "id": "bancolombia",
+        "name": "X",
+        "updatedAt": T_FUTURE,
+        "commissionSince": "2026-11-01",
+    }
+    response = await put(client, {"accounts": [unset, marked]})
+    await assert_account_rule_message(
+        response, "paymentMethods.accountId", "no puede apuntar a la cuenta de comisión"
+    )
+
+
+async def test_red_de_seguridad_segunda_cuenta_de_comision_de_la_bd_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "ensure_commission_accounts_valid", lambda _records: None)
+    response = await put(
+        client, {"accounts": [catalog_item(id="otra", commissionSince="2026-11-01")]}
+    )
+    await assert_account_rule_message(
+        response, "accounts.commissionSince", "Solo una cuenta puede ser la de comisión"
+    )
+
+
+async def test_red_de_seguridad_caja_como_comision_del_check_422(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(controller, "ensure_commission_accounts_valid", lambda _records: None)
+    caja = {"id": "caja", "name": "Caja", "isCashBox": True, "updatedAt": T_FUTURE}
+    response = await put(client, {"accounts": [{**caja, "commissionSince": "2026-11-01"}]})
+    await assert_account_rule_message(
+        response, "accounts.commissionSince", "La caja no puede ser la cuenta de comisión"
+    )

@@ -118,12 +118,28 @@ describe('apiStore', () => {
     expect(generic.message).toContain('cuentas')
   })
 
+  it('el 422 account_rule_violation de la cuenta de comisión llega con su frase', async () => {
+    const respond = (campo: string) => createApiStore('http://x', async () => json(422, { code: 'account_rule_violation', message: 'x', details: [{ campo, mensaje: 'x' }] })).save({}).catch(caught => caught as Error)
+    expect((await respond('accounts.commissionSince')).message).toContain('Solo una cuenta puede ser la de comisión')
+    expect((await respond('paymentMethods.accountId')).message).toContain('Un medio de pago no puede apuntar a la cuenta de comisión')
+    expect((await respond('accounts.active')).message).toContain('Una cuenta con movimientos no se puede desactivar ni borrar')
+  })
+
   it('load conserva las cuentas, completa vacío si faltan y descarta depositMovements', async () => {
     const body = { accounts: [{ id: 'caja', name: 'Caja', initialBalance: 0, isCashBox: true, sortOrder: 0, active: true, updatedAt: 'x', deleted: false }], depositMovements: [] }
     const loaded = await createApiStore('http://x', async () => json(200, body)).load()
     expect(loaded.accounts).toHaveLength(1)
     expect('depositMovements' in loaded).toBe(false)
     expect((await createApiStore('http://x', async () => json(200, {})).load()).accounts).toEqual([])
+  })
+
+  it('commissionSince de una cuenta se conserva al cargar y se envía tal cual al guardar', async () => {
+    const indrive = { id: 'indrive', name: 'Saldo inDrive', initialBalance: 0, isCashBox: false, sortOrder: 5, active: true, commissionSince: '2026-11-12', updatedAt: 'x', deleted: false }
+    const loaded = await createApiStore('http://x', async () => json(200, { accounts: [indrive] })).load()
+    expect(loaded.accounts[0]!.commissionSince).toBe('2026-11-12')
+    let sent: unknown
+    await createApiStore('http://x', async (_url, init) => { sent = JSON.parse(String(init?.body)); return json(200, {}) }).save({ accounts: loaded.accounts })
+    expect((sent as { accounts: { commissionSince?: string }[] }).accounts[0]!.commissionSince).toBe('2026-11-12')
   })
 
   it('save hace PUT con el cuerpo JSON', async () => {

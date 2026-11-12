@@ -19,7 +19,7 @@ describe('orden y filtro de catálogos', () => {
   })
   it('entryName da el nombre o, si el código no está, el propio código', () => {
     const { paymentMethods } = testCatalogs()
-    expect(entryName(paymentMethods, 'transfer')).toBe('Transferencia')
+    expect(entryName(paymentMethods, 'transfer')).toBe('Nequi')
     expect(entryName(paymentMethods, 'nequi')).toBe('nequi')
     expect(entryName(paymentMethods, undefined, 'Sin categoría')).toBe('Sin categoría')
   })

@@ -415,7 +415,7 @@ async def test_catalog_seeds_present_with_old_timestamp(session: AsyncSession) -
     )
     got = {(r[0], r[1]): (r[2], r[3], r[4]) for r in rows}
     assert got[("payment_methods", "cash")] == ("Efectivo", 1, "true")
-    assert got[("payment_methods", "transfer")] == ("Transferencia", 2, "false")
+    assert got[("payment_methods", "transfer")] == ("Nequi", 2, "false")
     assert got[("movement_types", "expense")] == ("Gasto", 1, "-1")
     assert got[("movement_types", "withdrawal")] == ("Retiro", 2, "-1")
     assert got[("movement_types", "deposit")] == ("Aporte", 3, "1")
@@ -428,7 +428,7 @@ async def test_catalog_seeds_present_with_old_timestamp(session: AsyncSession) -
     }
     recent = await session.scalar(
         text(
-            "select count(*) from payment_methods where id in ('cash', 'transfer') "
+            "select count(*) from payment_methods where id = 'cash' "
             "and updated_at <> '2000-01-01T00:00:00+00:00'"
         )
     )

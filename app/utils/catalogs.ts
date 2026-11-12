@@ -56,12 +56,16 @@ export const movementSign = (types: SignedEntry[], code: string): 1 | -1 | 0 => 
 /** ¿El tipo lleva categoría de gasto (y cuenta en «Gastos varios»)? Un código que no está en el catálogo no la lleva. */
 export const movementTypeHasCategory = (types: MovementTypeEntry[], code: string): boolean => types.find(type => type.id === code)?.hasCategory ?? false
 
+/** ¿Algún movimiento vivo sale de esta cuenta o llega a ella? */
+export const accountHasMovements = (movements: { accountId?: string; toAccountId?: string; deleted?: boolean }[], accountId: string): boolean =>
+  movements.some(movement => !movement.deleted && (movement.accountId === accountId || movement.toAccountId === accountId))
+
 /** ¿Algún registro vivo usa este código? Si sí, la entrada solo se puede desactivar, no borrar. */
 export function catalogEntryInUse(snapshot: Pick<Snapshot, 'services' | 'movements' | 'fundMovements' | 'categories' | 'paymentMethods'>, kind: CatalogKind, id: string): boolean {
   const alive = <Record extends { deleted?: boolean }>(records: Record[]) => records.filter(record => !record.deleted)
   switch (kind) {
     case 'accounts':
-      return alive(snapshot.movements).some(movement => movement.accountId === id || movement.toAccountId === id) || alive(snapshot.paymentMethods).some(method => method.accountId === id)
+      return accountHasMovements(snapshot.movements, id) || alive(snapshot.paymentMethods).some(method => method.accountId === id)
     case 'paymentMethods':
       return alive(snapshot.services).some(service => service.method === id) || alive(snapshot.movements).some(movement => movement.method === id)
     case 'movementTypes':

@@ -172,7 +172,7 @@ describe('taurus: depósito', () => {
     const taurus = createTaurus(store)
     await taurus.init()
     const catalogs = await taurus.repo.listCatalogs()
-    expect(catalogs.accounts.map(account => [account.id, account.isCashBox])).toEqual([['caja', true], ['transferencias', false], ['deposito', false]])
+    expect(catalogs.accounts.map(account => [account.id, account.isCashBox])).toEqual([['caja', true], ['transferencias', false], ['deposito', false], ['bancolombia', false], ['indrive', false]])
     expect(catalogs.paymentMethods.map(method => [method.id, method.accountId])).toEqual([['cash', 'caja'], ['transfer', 'transferencias']])
     expect(catalogs.movementTypes.some(type => type.id === 'traslado' && type.requiresDestination)).toBe(true)
   })
@@ -299,9 +299,9 @@ describe('taurus: depósito', () => {
   it('un almacén local sin catálogos los siembra; uno con catálogos no se toca', async () => {
     const taurus = await setup()
     const catalogs = await taurus.repo.listCatalogs()
-    expect(catalogs.paymentMethods.map(method => method.id)).toEqual(['cash', 'transfer'])
+    expect(catalogs.paymentMethods.map(method => method.id)).toEqual(['cash', 'transfer', 'bancolombia'])
     expect(catalogs.movementTypes.map(type => [type.id, type.sign])).toEqual([['expense', -1], ['withdrawal', -1], ['deposit', 1], ['traslado', -1]])
-    expect(catalogs.accounts.map(account => account.id)).toEqual(['caja', 'transferencias', 'deposito'])
+    expect(catalogs.accounts.map(account => account.id)).toEqual(['caja', 'transferencias', 'deposito', 'bancolombia', 'indrive'])
     expect(catalogs.fundMovementTypes.map(type => type.id)).toEqual(['transfer', 'spend'])
     expect(catalogs.expenseCategories.map(category => category.id)).toEqual(['comida', 'parqueadero', 'varios'])
     const store = createMemoryStore()
@@ -320,7 +320,7 @@ describe('taurus: depósito', () => {
     expect(method).toMatchObject({ id: 'nequi', accountId: 'transferencias', affectsCash: false, active: true }) // affectsCash sale de la cuenta
     await expect(taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Sin cuenta', accountId: 'nope', affectsCash: false })).rejects.toThrow(ApiError)
     const account = await taurus.repo.saveCatalogEntry('accounts', { name: 'Ahorros', initialBalance: 5000, isCashBox: false })
-    expect(account).toMatchObject({ id: 'ahorros', initialBalance: 5000, isCashBox: false, sortOrder: 3 })
+    expect(account).toMatchObject({ id: 'ahorros', initialBalance: 5000, isCashBox: false, sortOrder: 6 })
     await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: 'comida' })).rejects.toThrow(ApiError)
     await expect(taurus.repo.saveCatalogEntry('expenseCategories', { name: '---' })).rejects.toThrow(ApiError)
   })
@@ -330,6 +330,29 @@ describe('taurus: depósito', () => {
     const [first] = (await taurus.repo.listCatalogs()).movementTypes
     const edited = await taurus.repo.saveCatalogEntry('movementTypes', { ...first!, name: 'Gasto de ruta', active: false })
     expect(edited).toMatchObject({ id: first!.id, name: 'Gasto de ruta', active: false, sign: first!.sign })
+  })
+
+  it('las reglas de cuentas: una sola de comisión, nunca la caja, ni como cuenta de un medio, ni desactivar/borrar con movimientos', async () => {
+    const taurus = await setup()
+    const { accounts } = await taurus.repo.listCatalogs()
+    const find = (id: string) => accounts.find(account => account.id === id)!
+    await expect(taurus.repo.saveCatalogEntry('accounts', { ...find('bancolombia'), commissionSince: '2026-11-12' })).rejects.toThrow('Solo una cuenta puede ser la de comisión')
+    await expect(taurus.repo.saveCatalogEntry('accounts', { ...find('caja'), commissionSince: '2026-11-12' })).rejects.toThrow('La caja no puede ser la cuenta de comisión')
+    await expect(taurus.repo.saveCatalogEntry('paymentMethods', { name: 'Recarga', accountId: 'indrive', affectsCash: false })).rejects.toThrow('Un medio de pago no puede apuntar a la cuenta de comisión')
+    await taurus.repo.putCash({ date: '2026-11-12', opening: 0, openedAt: 'x', movements: [{ id: '', type: 'traslado', amount: 50000, accountId: 'transferencias', toAccountId: 'indrive' }] })
+    await expect(taurus.repo.saveCatalogEntry('accounts', { ...find('indrive'), active: false })).rejects.toThrow('Una cuenta con movimientos no se puede desactivar ni borrar')
+    await expect(taurus.repo.deleteCatalogEntry('accounts', 'transferencias')).rejects.toThrow('Una cuenta con movimientos no se puede desactivar ni borrar')
+    await taurus.repo.saveCatalogEntry('accounts', { ...find('bancolombia'), active: false }) // sin movimientos: se puede
+  })
+
+  it('commissionSince viaja con la cuenta de ida y vuelta y la cuenta corriente no la lleva', async () => {
+    const taurus = await setup()
+    const { accounts } = await taurus.repo.listCatalogs()
+    expect(accounts.find(account => account.id === 'indrive')!.commissionSince).toBe('2026-11-12')
+    expect('commissionSince' in accounts.find(account => account.id === 'bancolombia')!).toBe(false)
+    const edited = await taurus.repo.saveCatalogEntry('accounts', { ...accounts.find(account => account.id === 'indrive')!, name: 'inDrive' })
+    expect(edited.commissionSince).toBe('2026-11-12')
+    expect((await taurus.snapshot()).accounts.find(account => account.id === 'indrive')!.commissionSince).toBe('2026-11-12')
   })
 
   it('no permite borrar un código en uso; sin uso deja lápida y puede recrearse', async () => {

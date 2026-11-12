@@ -1,3 +1,4 @@
+import type { Account } from '../services/types'
 import { slugifyCode } from './catalogs'
 
 const isPositiveAmount = (amount: number | null | undefined): amount is number => typeof amount === 'number' && Number.isFinite(amount) && amount > 0
@@ -56,3 +57,25 @@ export function validateCatalogEntryInput(name: string, otherNames: string[]): s
   if (otherNames.some(other => slugifyCode(other) === slugifyCode(trimmed))) return 'Ya existe una opción con ese nombre.'
   return null
 }
+
+/* Reglas de las cuentas: mismos mensajes que el 422 `account_rule_violation` del backend. */
+export const ACCOUNT_RULE_MESSAGES = {
+  singleCommission: 'Solo una cuenta puede ser la de comisión',
+  cashBoxCommission: 'La caja no puede ser la cuenta de comisión',
+  methodOnCommission: 'Un medio de pago no puede apuntar a la cuenta de comisión',
+  hasMovements: 'Una cuenta con movimientos no se puede desactivar ni borrar',
+} as const
+
+/** Mensaje si la cuenta incumple una regla (una sola de comisión, nunca la caja, no desactivar con movimientos); `otherAccounts` = las demás. */
+export function validateAccountRules(account: Pick<Account, 'isCashBox' | 'active' | 'commissionSince'>, otherAccounts: Pick<Account, 'commissionSince'>[], hasMovements: boolean): string | null {
+  if (account.commissionSince) {
+    if (account.isCashBox) return ACCOUNT_RULE_MESSAGES.cashBoxCommission
+    if (otherAccounts.some(other => other.commissionSince)) return ACCOUNT_RULE_MESSAGES.singleCommission
+  }
+  if (!account.active && hasMovements) return ACCOUNT_RULE_MESSAGES.hasMovements
+  return null
+}
+
+/** Mensaje si la cuenta elegida para un medio de pago es la de comisión (la recarga es un traslado, no un cobro). */
+export const validateMethodAccount = (accountId: string, accounts: Pick<Account, 'id' | 'commissionSince'>[]): string | null =>
+  accounts.find(account => account.id === accountId)?.commissionSince ? ACCOUNT_RULE_MESSAGES.methodOnCommission : null

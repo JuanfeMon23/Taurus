@@ -92,3 +92,14 @@ async def movements_with_wrong_destination(
     missing = [movement_id for movement_id, required in rows if required]
     forbidden = [movement_id for movement_id, required in rows if not required]
     return missing, forbidden
+
+
+async def payment_methods_pointing_to_commission_account(session: AsyncSession) -> list[str]:
+    """Medios (ya escritos) cuya cuenta es la de comisión: ninguno puede apuntar a ella."""
+    result = await session.scalars(
+        select(PaymentMethod.id)
+        .join(Account, Account.id == PaymentMethod.account_id)
+        .where(Account.commission_since.is_not(None))
+        .order_by(PaymentMethod.id)
+    )
+    return list(result)

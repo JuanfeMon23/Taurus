@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { validateCatalogEntryInput, validateFundMovementInput, validateMovementInput, validateShiftInput, validateShiftTemplateInput } from '../app/utils/validation'
+import { validateAccountRules, validateMethodAccount, validateCatalogEntryInput, validateFundMovementInput, validateMovementInput, validateShiftInput, validateShiftTemplateInput } from '../app/utils/validation'
 import { GENERIC_ERROR, toUserMessage } from '../app/utils/errors'
+import { testCatalogs } from './fixtures/catalogs'
 import { ApiError } from '../app/services/apiStore'
 
 describe('validateMovementInput', () => {
@@ -90,5 +91,31 @@ describe('validateCatalogEntryInput', () => {
   })
   it('rechaza un nombre sin letras ni números (no genera código)', () => {
     expect(validateCatalogEntryInput('---', [])).toBe('El nombre debe tener letras o números.')
+  })
+})
+
+describe('reglas de cuentas (mismos mensajes del backend)', () => {
+  const { accounts } = testCatalogs()
+  const find = (id: string) => accounts.find(account => account.id === id)!
+  const others = (id: string) => accounts.filter(account => account.id !== id)
+
+  it('una cuenta corriente sin movimientos es válida; la de comisión actual también', () => {
+    expect(validateAccountRules(find('bancolombia'), others('bancolombia'), false)).toBeNull()
+    expect(validateAccountRules(find('indrive'), others('indrive'), true)).toBeNull()
+  })
+  it('solo una cuenta puede ser la de comisión', () => {
+    expect(validateAccountRules({ ...find('bancolombia'), commissionSince: '2026-11-12' }, others('bancolombia'), false)).toBe('Solo una cuenta puede ser la de comisión')
+  })
+  it('la caja no puede ser la cuenta de comisión', () => {
+    expect(validateAccountRules({ ...find('caja'), commissionSince: '2026-11-12' }, others('caja'), false)).toBe('La caja no puede ser la cuenta de comisión')
+  })
+  it('una cuenta con movimientos no se puede desactivar', () => {
+    expect(validateAccountRules({ ...find('transferencias'), active: false }, others('transferencias'), true)).toBe('Una cuenta con movimientos no se puede desactivar ni borrar')
+    expect(validateAccountRules({ ...find('transferencias'), active: false }, others('transferencias'), false)).toBeNull()
+  })
+  it('un medio de pago no puede apuntar a la cuenta de comisión', () => {
+    expect(validateMethodAccount('indrive', accounts)).toBe('Un medio de pago no puede apuntar a la cuenta de comisión')
+    expect(validateMethodAccount('bancolombia', accounts)).toBeNull()
+    expect(validateMethodAccount('desconocida', accounts)).toBeNull()
   })
 })

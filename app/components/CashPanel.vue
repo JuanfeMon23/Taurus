@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowLeftRight, Banknote, HandCoins, Lock, LockOpen, Plus, Scale, Trash2, Vault, Wallet } from 'lucide-vue-next'
 import type { CashDay, CashMovement, DatedMovement, DayRecord } from '../services/types'
-import { accountBalances, DEPOSIT_ACCOUNT_ID, movementDirection } from '../utils/accounts'
+import { accountBalances, DEPOSIT_ACCOUNT_ID, movementDirection, needsRecharge } from '../utils/accounts'
 import { cashSummary, closingBase, keptInCash, suggestedOpening, validateClosing } from '../utils/cash'
 import { accountIsCashBox, entryName, methodAffectsCash, movementSign, movementTypeHasCategory, movementTypeRequiresDestination } from '../utils/catalogs'
 import { toUserMessage } from '../utils/errors'
@@ -77,7 +77,8 @@ const summaryLines = computed<SummaryLine[]>(() => {
 })
 const isOpen = computed(() => !!cash.value && !cash.value.closedAt)
 // Saldos de todas las cuentas; la caja sigue el ciclo diario (efectivo esperado / queda en caja).
-const balances = computed(() => accountBalances({ ...catalogs.value, movements: movements.value, cashes: allCash.value, days: days.value }))
+const balances = computed(() => accountBalances({ ...catalogs.value, movements: movements.value, cashes: allCash.value, days: days.value })
+  .map(entry => ({ ...entry, recharge: needsRecharge(entry.account, entry.balance) })))
 const otherBalances = computed(() => balances.value.filter(entry => !entry.account.isCashBox))
 const depositBalanceNow = computed(() => balances.value.find(entry => entry.account.id === DEPOSIT_ACCOUNT_ID)?.balance ?? 0)
 const depositOutflows = computed(() => movements.value.filter(movement => movement.accountId === DEPOSIT_ACCOUNT_ID))
@@ -203,7 +204,8 @@ const removeMovement = (id: string) =>
           <span class="icon-tile"><component :is="accountIcon(entry.account.id, entry.account.isCashBox)" :size="20" /></span>
           <div>
             <p class="small muted">{{ entry.account.name }}</p>
-            <b class="num balance-amount" :class="{ neg: entry.balance < 0 }">{{ money(entry.balance) }}</b>
+            <b class="num balance-amount" :class="{ neg: entry.balance < 0 || entry.recharge }">{{ money(entry.balance) }}</b>
+            <p v-if="entry.recharge" class="small neg recharge">Recarga inDrive</p>
           </div>
         </div>
       </div>
@@ -240,7 +242,9 @@ const removeMovement = (id: string) =>
           </div>
         </div>
         <div v-if="otherBalances.length" class="cash-lines balances-row" aria-label="Saldos de las otras cuentas">
-          <div v-for="entry in otherBalances" :key="entry.account.id"><span>{{ entry.account.name }}</span><b class="num">{{ money(entry.balance) }}</b></div>
+          <div v-for="entry in otherBalances" :key="entry.account.id" :class="{ neg: entry.recharge }">
+            <span>{{ entry.recharge ? 'Recarga inDrive' : entry.account.name }}</span><b class="num">{{ money(entry.balance) }}</b>
+          </div>
         </div>
         <div v-for="income in offCashIncome" :key="income.id" class="note">
           <ArrowLeftRight :size="16" /> {{ money(income.amount) }} por {{ income.name.toLowerCase() }} (no entran a caja)
@@ -433,11 +437,13 @@ const removeMovement = (id: string) =>
 .cash-total { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; }
 .cash-lines { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 20px; font-size: 13px; }
 .cash-lines > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; color: var(--text-2); }
+.cash-lines > div.neg { color: var(--neg); font-weight: 700; }
 .cash-lines > div > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .balances-row { padding-top: 6px; border-top: 1px solid var(--border); }
 .balances { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
 .balance { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: var(--surface-2); }
 .balance p { margin: 0; }
+.recharge { font-weight: 700; }
 .balance-amount { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
 .cash-lines > .sep { grid-column: 1 / -1; padding-top: 4px; border-top: 1px solid var(--border); }
 .rel { position: relative; }
